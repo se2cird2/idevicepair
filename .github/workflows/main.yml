@@ -8,21 +8,15 @@ jobs:
   build-all:
     runs-on: macos-latest
     env:
-      BINARY_NAME: your_binary_name  # ← change this
+      PACKAGE_NAME: idevicepair
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      # ───────────────────────────────────────────────────────────────────────────
-      # 1) Remove Homebrew’s limited rustup
-      - name: Uninstall Homebrew rustup
-        run: |
-          brew uninstall rustup rustup-init || true
+      - name: Uninstall Homebrew’s rustup
+        run: brew uninstall rustup rustup-init || true
 
-      # ───────────────────────────────────────────────────────────────────────────
-      # 2) Install official rustup + add all targets
-      - name: Install Rust toolchain & targets
+      - name: Install Rust & add targets
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
           source $HOME/.cargo/env
@@ -34,8 +28,6 @@ jobs:
             aarch64-apple-darwin \
             x86_64-pc-windows-gnu
 
-      # ───────────────────────────────────────────────────────────────────────────
-      # 3) Install Zig & mingw-w64 for cross‐linking
       - name: Install Zig & mingw-w64
         run: |
           brew install zig
@@ -44,43 +36,38 @@ jobs:
       - name: Install cargo-zigbuild
         run: cargo install cargo-zigbuild
 
-      # ───────────────────────────────────────────────────────────────────────────
-      # 4) Build Linux static via Zig
+      # Linux static via Zig
       - name: Build Linux x86_64
-        run: cargo zigbuild --release --target x86_64-unknown-linux-gnu
+        run: cargo zigbuild --release --package $PACKAGE_NAME --target x86_64-unknown-linux-gnu
 
       - name: Build Linux ARM64
-        run: cargo zigbuild --release --target aarch64-unknown-linux-gnu
+        run: cargo zigbuild --release --package $PACKAGE_NAME --target aarch64-unknown-linux-gnu
 
-      # ───────────────────────────────────────────────────────────────────────────
-      # 5) Build macOS binaries & create universal
+      # macOS native
       - name: Build macOS x86_64
-        run: cargo build --release --target x86_64-apple-darwin
+        run: cargo build --release --package $PACKAGE_NAME --target x86_64-apple-darwin
 
       - name: Build macOS ARM64
-        run: cargo build --release --target aarch64-apple-darwin
+        run: cargo build --release --package $PACKAGE_NAME --target aarch64-apple-darwin
 
-      - name: Create macOS universal binary
+      - name: Create macOS Universal
         run: |
           mkdir -p target/universal/release
           lipo \
-            target/x86_64-apple-darwin/release/${BINARY_NAME} \
-            target/aarch64-apple-darwin/release/${BINARY_NAME} \
-            -create -output target/universal/release/${BINARY_NAME}
+            target/x86_64-apple-darwin/release/$PACKAGE_NAME \
+            target/aarch64-apple-darwin/release/$PACKAGE_NAME \
+            -create -output target/universal/release/$PACKAGE_NAME
 
-      # ───────────────────────────────────────────────────────────────────────────
-      # 6) Cross-compile Windows GNU
+      # Windows GNU cross-compile
       - name: Build Windows x86_64-pc-windows-gnu
-        run: cargo build --release --target x86_64-pc-windows-gnu
+        run: cargo build --release --package $PACKAGE_NAME --target x86_64-pc-windows-gnu
 
-      # ───────────────────────────────────────────────────────────────────────────
-      # 7) Upload all builds (now using v4)
-      - name: Upload all builds
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: all-binaries
           path: |
-            target/x86_64-unknown-linux-gnu/release/${BINARY_NAME}
-            target/aarch64-unknown-linux-gnu/release/${BINARY_NAME}
-            target/universal/release/${BINARY_NAME}
-            target/x86_64-pc-windows-gnu/release/${BINARY_NAME}.exe
+            target/x86_64-unknown-linux-gnu/release/$PACKAGE_NAME
+            target/aarch64-unknown-linux-gnu/release/$PACKAGE_NAME
+            target/universal/release/$PACKAGE_NAME
+            target/x86_64-pc-windows-gnu/release/$PACKAGE_NAME.exe
