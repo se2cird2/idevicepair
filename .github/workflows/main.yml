@@ -40,9 +40,9 @@ jobs:
       # ──────────────────────────────────────────────────────────────────────────────
       # 5) Cross-build for Linux x86_64
       - name: Build Linux x86_64
-        run: cargo zigbuild --release --target x86_64-unknown-linux-gnu
+        run: cargo zigbuild --release --bin pair --target x86_64-unknown-linux-gnu
 
       # ──────────────────────────────────────────────────────────────────────────────
       # 6) Cross-build for Linux ARM64
       - name: Build Linux ARM64
-        run: cargo zigbuild --release --target aarch64-unknown-linux-gnu
+        run: cargo zigbuild --release --bin pair --target aarch64-unknown-linux-gnu
