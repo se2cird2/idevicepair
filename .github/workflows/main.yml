@@ -5,48 +5,82 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
+  build-all:
     runs-on: macos-latest
+    env:
+      BINARY_NAME: your_binary_name  # change to your actual executable name
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
       # ───────────────────────────────────────────────────────────────────────────
-      # 1) Remove Homebrew’s broken rustup/rustup-init packages
+      # 1) Remove Homebrew’s limited rustup
       - name: Uninstall Homebrew rustup
         run: |
           brew uninstall rustup rustup-init || true
-          # Homebrew’s rustup and rustup-init conflict; removing them lets us install upstream rustup cleanly :contentReference[oaicite:4]{index=4}
 
       # ───────────────────────────────────────────────────────────────────────────
-      # 2) Install Rust via the official rustup installer
-      - name: Install Rust toolchain and targets
+      # 2) Install official rustup + add all targets
+      - name: Install Rust toolchain & targets
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
           source $HOME/.cargo/env
           rustup component add rustfmt clippy
-          rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
-          # This gives us a full-featured rustup with cross-target support :contentReference[oaicite:5]{index=5}
+          rustup target add \
+            x86_64-unknown-linux-gnu \
+            aarch64-unknown-linux-gnu \
+            x86_64-apple-darwin \
+            aarch64-apple-darwin \
+            x86_64-pc-windows-gnu
 
       # ───────────────────────────────────────────────────────────────────────────
-      # 3) Install Zig for linking
-      - name: Install Zig (via Homebrew)
-        run: brew install zig
-        # Installs the latest stable Zig; no need for --HEAD :contentReference[oaicite:6]{index=6}
+      # 3) Install native tools
+      - name: Install Zig & mingw-w64
+        run: |
+          brew install zig
+          brew install mingw-w64
 
-      # ───────────────────────────────────────────────────────────────────────────
-      # 4) Install cargo-zigbuild helper
       - name: Install cargo-zigbuild
         run: cargo install cargo-zigbuild
-        # Adds the `cargo zigbuild` subcommand
 
       # ───────────────────────────────────────────────────────────────────────────
-      # 5) Cross-build for Linux x86_64
+      # 4) Build Linux static via Zig
       - name: Build Linux x86_64
         run: cargo zigbuild --release --bin pair --target x86_64-unknown-linux-gnu
 
-      # ───────────────────────────────────────────────────────────────────────────
-      # 6) Cross-build for Linux ARM64
       - name: Build Linux ARM64
         run: cargo zigbuild --release --bin pair --target aarch64-unknown-linux-gnu
+
+      # ───────────────────────────────────────────────────────────────────────────
+      # 5) Build macOS binaries
+      - name: Build macOS x86_64
+        run: cargo build --release --bin pair --target x86_64-apple-darwin
+
+      - name: Build macOS ARM64
+        run: cargo build --release --bin pair --target aarch64-apple-darwin
+
+      - name: Create macOS universal binary
+        run: |
+          mkdir -p target/universal/release
+          lipo \
+            target/x86_64-apple-darwin/release/${BINARY_NAME} \
+            target/aarch64-apple-darwin/release/${BINARY_NAME} \
+            -create -output target/universal/release/${BINARY_NAME}
+
+      # ───────────────────────────────────────────────────────────────────────────
+      # 6) Cross-compile Windows GNU
+      - name: Build Windows x86_64-pc-windows-gnu
+        run: cargo build --release --bin pair --target x86_64-pc-windows-gnu
+
+      # ───────────────────────────────────────────────────────────────────────────
+      # 7) Upload artifacts (optional)
+      - name: Upload all builds
+        uses: actions/upload-artifact@v3
+        with:
+          name: all-binaries
+          path: |
+            target/x86_64-unknown-linux-gnu/release/${BINARY_NAME}
+            target/aarch64-unknown-linux-gnu/release/${BINARY_NAME}
+            target/universal/release/${BINARY_NAME}
+            target/x86_64-pc-windows-gnu/release/${BINARY_NAME}.exe
