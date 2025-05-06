@@ -8,110 +8,85 @@ env:
   BINARY_NAME: pair
 
 jobs:
-  # ───────────────────────────────────────────────────────────────────────────
-  # 1) Linux on Ubuntu — build natively with cargo
-  build-linux:
+  # Linux x86_64
+  build-linux-x64:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu ]
-
     steps:
       - uses: actions/checkout@v3
-
-      - name: Install Rust & add target
+      - name: Install Rust
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y
           source $HOME/.cargo/env
           rustup component add rustfmt clippy
-          rustup target add ${{ matrix.target }}
+      - name: Build x86_64
+        run: cargo build --release --bin pair
 
-      - name: Build Linux ${{ matrix.target }}
+  # Linux ARM64 (native)
+  build-linux-arm64:
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Rust
         run: |
-          cargo build --release --bin pair --target ${{ matrix.target }}
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
+          source $HOME/.cargo/env
+          rustup component add rustfmt clippy
+      - name: Build ARM64
+        run: cargo build --release --bin pair
 
-      - name: Upload Linux ${{ matrix.target }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/pair
-
-  # ───────────────────────────────────────────────────────────────────────────
-  # 2) macOS on macos-latest — native slices + universal
+  # macOS slices
   build-macos:
     runs-on: macos-latest
     strategy:
       matrix:
         target: [ x86_64-apple-darwin, aarch64-apple-darwin ]
-
     steps:
       - uses: actions/checkout@v3
-
-      - name: Uninstall Homebrew rustup
-        run: brew uninstall rustup rustup-init || true
-
-      - name: Install Rust & add target
+      - name: Install Rust
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y
           source $HOME/.cargo/env
           rustup component add rustfmt clippy
-          rustup target add ${{ matrix.target }}
-
-      - name: Build macOS ${{ matrix.target }}
+      - name: Build ${{ matrix.target }}
         run: cargo build --release --bin pair --target ${{ matrix.target }}
 
-      - name: Upload macOS ${{ matrix.target }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/pair
-
+  # Combine macOS universal
   universal-macos:
     needs: build-macos
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
-
       - name: Create universal binary
         run: |
-          mkdir -p target/universal/release
           lipo \
             target/x86_64-apple-darwin/release/pair \
             target/aarch64-apple-darwin/release/pair \
             -create -output target/universal/release/pair
 
-      - name: Upload macOS universal
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-universal
-          path: target/universal/release/pair
-
-  # ───────────────────────────────────────────────────────────────────────────
-  # 3) Windows on windows-latest — native with mingw
+  # Windows x86_64 (native)
   build-windows:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        target: [ x86_64-pc-windows-gnu ]
-
     steps:
       - uses: actions/checkout@v3
-
-      - name: Install Rust & add target
+      - name: Install Rust
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y
           refreshenv
           rustup component add rustfmt clippy
-          rustup target add ${{ matrix.target }}
-
       - name: Install mingw-w64
         run: choco install mingw -y
+      - name: Build Windows
+        run: cargo build --release --bin pair --target x86_64-pc-windows-gnu
 
-      - name: Build Windows ${{ matrix.target }}
-        run: cargo build --release --bin pair --target ${{ matrix.target }}
-
-      - name: Upload Windows
-        uses: actions/upload-artifact@v4
+  # Upload artifacts
+  upload:
+    needs: [build-linux-x64, build-linux-arm64, universal-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
         with:
-          name: windows-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/pair.exe
+          name: all-binaries
+          path: |
+            target/release/pair*
+            target/universal/release/pair
+            target/x86_64-pc-windows-gnu/release/pair.exe
