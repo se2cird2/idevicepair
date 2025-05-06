@@ -8,8 +8,8 @@ env:
   BINARY_NAME: pair
 
 jobs:
-  # ──────────────────────────────────────────────────────────────────────────────
-  # Linux on Ubuntu ─ install Zig + build static
+  # ───────────────────────────────────────────────────────────────────────────
+  # 1) Linux on Ubuntu — build natively with cargo
   build-linux:
     runs-on: ubuntu-latest
     strategy:
@@ -19,21 +19,16 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Install Rust + targets
+      - name: Install Rust & add target
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y
           source $HOME/.cargo/env
           rustup component add rustfmt clippy
           rustup target add ${{ matrix.target }}
 
-      - name: Install Zig & cargo-zigbuild
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y zig
-          cargo install cargo-zigbuild
-
       - name: Build Linux ${{ matrix.target }}
-        run: cargo zigbuild --release --bin pair --target ${{ matrix.target }}
+        run: |
+          cargo build --release --bin pair --target ${{ matrix.target }}
 
       - name: Upload Linux ${{ matrix.target }}
         uses: actions/upload-artifact@v4
@@ -41,8 +36,8 @@ jobs:
           name: linux-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/pair
 
-  # ──────────────────────────────────────────────────────────────────────────────
-  # macOS on macos-latest ─ build each slice then universalize
+  # ───────────────────────────────────────────────────────────────────────────
+  # 2) macOS on macos-latest — native slices + universal
   build-macos:
     runs-on: macos-latest
     strategy:
@@ -55,7 +50,7 @@ jobs:
       - name: Uninstall Homebrew rustup
         run: brew uninstall rustup rustup-init || true
 
-      - name: Install Rust + targets
+      - name: Install Rust & add target
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y
           source $HOME/.cargo/env
@@ -71,7 +66,6 @@ jobs:
           name: macos-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/pair
 
-  # After both macOS slices complete, combine them  
   universal-macos:
     needs: build-macos
     runs-on: macos-latest
@@ -92,8 +86,8 @@ jobs:
           name: macos-universal
           path: target/universal/release/pair
 
-  # ──────────────────────────────────────────────────────────────────────────────
-  # Windows on windows-latest ─ native build with mingw
+  # ───────────────────────────────────────────────────────────────────────────
+  # 3) Windows on windows-latest — native with mingw
   build-windows:
     runs-on: windows-latest
     strategy:
@@ -103,7 +97,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Install Rust + target
+      - name: Install Rust & add target
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y
           refreshenv
