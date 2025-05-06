@@ -8,7 +8,7 @@ jobs:
   build-all:
     runs-on: macos-latest
     env:
-      BINARY_NAME: your_binary_name  # change to your actual executable name
+      BINARY_NAME: your_binary_name  # ← change this
 
     steps:
       - name: Checkout code
@@ -35,7 +35,7 @@ jobs:
             x86_64-pc-windows-gnu
 
       # ───────────────────────────────────────────────────────────────────────────
-      # 3) Install native tools
+      # 3) Install Zig & mingw-w64 for cross‐linking
       - name: Install Zig & mingw-w64
         run: |
           brew install zig
@@ -47,18 +47,18 @@ jobs:
       # ───────────────────────────────────────────────────────────────────────────
       # 4) Build Linux static via Zig
       - name: Build Linux x86_64
-        run: cargo zigbuild --release --bin pair --target x86_64-unknown-linux-gnu
+        run: cargo zigbuild --release --target x86_64-unknown-linux-gnu
 
       - name: Build Linux ARM64
-        run: cargo zigbuild --release --bin pair --target aarch64-unknown-linux-gnu
+        run: cargo zigbuild --release --target aarch64-unknown-linux-gnu
 
       # ───────────────────────────────────────────────────────────────────────────
-      # 5) Build macOS binaries
+      # 5) Build macOS binaries & create universal
       - name: Build macOS x86_64
-        run: cargo build --release --bin pair --target x86_64-apple-darwin
+        run: cargo build --release --target x86_64-apple-darwin
 
       - name: Build macOS ARM64
-        run: cargo build --release --bin pair --target aarch64-apple-darwin
+        run: cargo build --release --target aarch64-apple-darwin
 
       - name: Create macOS universal binary
         run: |
@@ -71,12 +71,12 @@ jobs:
       # ───────────────────────────────────────────────────────────────────────────
       # 6) Cross-compile Windows GNU
       - name: Build Windows x86_64-pc-windows-gnu
-        run: cargo build --release --bin pair --target x86_64-pc-windows-gnu
+        run: cargo build --release --target x86_64-pc-windows-gnu
 
       # ───────────────────────────────────────────────────────────────────────────
-      # 7) Upload artifacts (optional)
+      # 7) Upload all builds (now using v4)
       - name: Upload all builds
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: all-binaries
           path: |
