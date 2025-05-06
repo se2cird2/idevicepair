@@ -5,66 +5,119 @@ on:
     branches: [ main ]
 
 env:
-  BINARY_NAME: your_binary_name
-  PACKAGE_NAME: idevicepair
+  BINARY_NAME: pair
 
 jobs:
-  build:
-    runs-on: macos-latest
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Linux on Ubuntu ─ install Zig + build static
+  build-linux:
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          # Linux static builds via Zig
-          - target: x86_64-unknown-linux-gnu
-            tool: zig
-          - target: aarch64-unknown-linux-gnu
-            tool: zig
-
-          # macOS builds (arch-specific)
-          - target: x86_64-apple-darwin
-            tool: native
-          - target: aarch64-apple-darwin
-            tool: native
-
-          # Windows GNU cross-compile
-          - target: x86_64-pc-windows-gnu
-            tool: mingw
+        target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu ]
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Uninstall Homebrew rustup
-        run: brew uninstall rustup rustup-init || true
-
-      - name: Install Rust & Add Target
+      - name: Install Rust + targets
         run: |
-          curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
           source $HOME/.cargo/env
           rustup component add rustfmt clippy
           rustup target add ${{ matrix.target }}
 
-      - name: Install Tools
+      - name: Install Zig & cargo-zigbuild
         run: |
-          brew install zig
-          brew install mingw-w64
+          sudo apt-get update
+          sudo apt-get install -y zig
           cargo install cargo-zigbuild
 
-      - name: Compile ${{ matrix.target }}
-        run: |
-          if [[ "${{ matrix.tool }}" == "zig" ]]; then
-            cargo zigbuild --release --package $PACKAGE_NAME --target ${{ matrix.target }}
-          else
-            cargo build    --release --package $PACKAGE_NAME --target ${{ matrix.target }}
-          fi
+      - name: Build Linux ${{ matrix.target }}
+        run: cargo zigbuild --release --bin pair --target ${{ matrix.target }}
 
-  upload:
-    needs: build
-    runs-on: macos-latest
-    steps:
-      - name: Upload all builds
+      - name: Upload Linux ${{ matrix.target }}
         uses: actions/upload-artifact@v4
         with:
-          name: all-binaries
-          path: |
-            **/release/${{ env.BINARY_NAME }}*
+          name: linux-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/pair
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # macOS on macos-latest ─ build each slice then universalize
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [ x86_64-apple-darwin, aarch64-apple-darwin ]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Uninstall Homebrew rustup
+        run: brew uninstall rustup rustup-init || true
+
+      - name: Install Rust + targets
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
+          source $HOME/.cargo/env
+          rustup component add rustfmt clippy
+          rustup target add ${{ matrix.target }}
+
+      - name: Build macOS ${{ matrix.target }}
+        run: cargo build --release --bin pair --target ${{ matrix.target }}
+
+      - name: Upload macOS ${{ matrix.target }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/pair
+
+  # After both macOS slices complete, combine them  
+  universal-macos:
+    needs: build-macos
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Create universal binary
+        run: |
+          mkdir -p target/universal/release
+          lipo \
+            target/x86_64-apple-darwin/release/pair \
+            target/aarch64-apple-darwin/release/pair \
+            -create -output target/universal/release/pair
+
+      - name: Upload macOS universal
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: target/universal/release/pair
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Windows on windows-latest ─ native build with mingw
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target: [ x86_64-pc-windows-gnu ]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust + target
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
+          refreshenv
+          rustup component add rustfmt clippy
+          rustup target add ${{ matrix.target }}
+
+      - name: Install mingw-w64
+        run: choco install mingw -y
+
+      - name: Build Windows ${{ matrix.target }}
+        run: cargo build --release --bin pair --target ${{ matrix.target }}
+
+      - name: Upload Windows
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/pair.exe
