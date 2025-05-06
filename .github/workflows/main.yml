@@ -8,7 +8,7 @@ env:
   BINARY_NAME: pair
 
 jobs:
-  # 1) Linux (Ubuntu x86_64)
+  # Linux x86_64
   build-linux-x64:
     runs-on: ubuntu-latest
     steps:
@@ -17,54 +17,76 @@ jobs:
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y
           source $HOME/.cargo/env
-      - name: Build Linux x86_64
+          rustup component add rustfmt clippy
+      - name: Build x86_64
         run: cargo build --release --bin pair
-      - name: Upload Linux x86_64
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-x86_64
-          path: target/release/pair
 
-  # 2) macOS (universal)
-  build-macos:
-    runs-on: macos-latest
+  # Linux ARM64 (native)
+  build-linux-arm64:
+    runs-on: ubuntu-22.04-arm
     steps:
       - uses: actions/checkout@v3
       - name: Install Rust
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y
           source $HOME/.cargo/env
-      - name: Build x86_64 slice
-        run: cargo build --release --bin pair --target x86_64-apple-darwin
-      - name: Build ARM64 slice
-        run: cargo build --release --bin pair --target aarch64-apple-darwin
+          rustup component add rustfmt clippy
+      - name: Build ARM64
+        run: cargo build --release --bin pair
+
+  # macOS slices
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [ x86_64-apple-darwin, aarch64-apple-darwin ]
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Rust
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
+          source $HOME/.cargo/env
+          rustup component add rustfmt clippy
+      - name: Build ${{ matrix.target }}
+        run: cargo build --release --bin pair --target ${{ matrix.target }}
+
+  # Combine macOS universal
+  universal-macos:
+    needs: build-macos
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
       - name: Create universal binary
         run: |
-          mkdir -p target/universal/release
           lipo \
             target/x86_64-apple-darwin/release/pair \
             target/aarch64-apple-darwin/release/pair \
             -create -output target/universal/release/pair
-      - name: Upload macOS universal
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-universal
-          path: target/universal/release/pair
 
-  # 3) Windows (native MSVC)
+  # Windows x86_64 (native)
   build-windows:
-    name: Build Windows (MSVC)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Install Rust (MSVC toolchain)
+      - name: Install Rust
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y
           refreshenv
-      - name: Build Windows executable
-        run: cargo build --release --bin pair
-      - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+          rustup component add rustfmt clippy
+      - name: Install mingw-w64
+        run: choco install mingw -y
+      - name: Build Windows
+        run: cargo build --release --bin pair --target x86_64-pc-windows-gnu
+
+  # Upload artifacts
+  upload:
+    needs: [build-linux-x64, build-linux-arm64, universal-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
         with:
-          name: windows-msvc
-          path: target/release/pair.exe
+          name: all-binaries
+          path: |
+            target/release/pair*
+            target/universal/release/pair
+            target/x86_64-pc-windows-gnu/release/pair.exe
