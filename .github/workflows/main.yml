@@ -1,73 +1,74 @@
 name: CI
 
-on:
-  push:
-    branches: [ main ]
+on: [push]
+
+env:
+  BINARY_NAME: your_binary_name
+  PACKAGE_NAME: idevicepair
 
 jobs:
-  build-all:
+  build:
     runs-on: macos-latest
-    env:
-      PACKAGE_NAME: idevicepair
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu; tool: zig
+          - target: aarch64-unknown-linux-gnu; tool: zig
+          - target: x86_64-apple-darwin;       tool: native
+          - target: aarch64-apple-darwin;      tool: native
+          - target: x86_64-pc-windows-gnu;     tool: mingw
 
     steps:
       - uses: actions/checkout@v3
 
-      - name: Uninstall Homebrew’s rustup
+      - name: Uninstall Homebrew rustup
         run: brew uninstall rustup rustup-init || true
 
-      - name: Install Rust & add targets
+      - name: Install Rust & Target ${{ matrix.target }}
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
           source $HOME/.cargo/env
           rustup component add rustfmt clippy
-          rustup target add \
-            x86_64-unknown-linux-gnu \
-            aarch64-unknown-linux-gnu \
-            x86_64-apple-darwin \
-            aarch64-apple-darwin \
-            x86_64-pc-windows-gnu
+          rustup target add ${{ matrix.target }}
 
-      - name: Install Zig & mingw-w64
+      - name: Install Tools
         run: |
           brew install zig
           brew install mingw-w64
+          cargo install cargo-zigbuild
 
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild
+      - name: Compile ${{ matrix.target }}
+        run: |
+          if [[ "${{ matrix.tool }}" == "zig" ]]; then
+            cargo zigbuild --release --package $PACKAGE_NAME --target ${{ matrix.target }}
+          else
+            cargo build    --release --package $PACKAGE_NAME --target ${{ matrix.target }}
+          fi
 
-      # Linux static via Zig
-      - name: Build Linux x86_64
-        run: cargo zigbuild --release --package $PACKAGE_NAME --target x86_64-unknown-linux-gnu
-
-      - name: Build Linux ARM64
-        run: cargo zigbuild --release --package $PACKAGE_NAME --target aarch64-unknown-linux-gnu
-
-      # macOS native
-      - name: Build macOS x86_64
-        run: cargo build --release --package $PACKAGE_NAME --target x86_64-apple-darwin
-
-      - name: Build macOS ARM64
-        run: cargo build --release --package $PACKAGE_NAME --target aarch64-apple-darwin
-
-      - name: Create macOS Universal
+  universal:
+    needs:
+      - build  # it will run after both macOS matrix entries complete
+    if: ${{ always() && contains(matrix.include.*.target, 'apple-darwin') }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Create Universal
         run: |
           mkdir -p target/universal/release
           lipo \
-            target/x86_64-apple-darwin/release/$PACKAGE_NAME \
-            target/aarch64-apple-darwin/release/$PACKAGE_NAME \
-            -create -output target/universal/release/$PACKAGE_NAME
+            target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }} \
+            target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }} \
+            -create -output target/universal/release/${{ env.BINARY_NAME }}
 
-      # Windows GNU cross-compile
-      - name: Build Windows x86_64-pc-windows-gnu
-        run: cargo build --release --package $PACKAGE_NAME --target x86_64-pc-windows-gnu
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+  upload:
+    needs: [build, universal]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/upload-artifact@v4
         with:
           name: all-binaries
           path: |
-            target/x86_64-unknown-linux-gnu/release/$PACKAGE_NAME
-            target/aarch64-unknown-linux-gnu/release/$PACKAGE_NAME
-            target/universal/release/$PACKAGE_NAME
-            target/x86_64-pc-windows-gnu/release/$PACKAGE_NAME.exe
+            target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
+            target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
+            target/universal/release/${{ env.BINARY_NAME }}
+            target/x86_64-pc-windows-gnu/release/${{ env.BINARY_NAME }}.exe
