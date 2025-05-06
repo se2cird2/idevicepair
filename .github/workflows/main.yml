@@ -9,27 +9,40 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-      - name: Set up Rust toolchain and targets
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: |
-            x86_64-unknown-linux-gnu
-            aarch64-unknown-linux-gnu
+      # ──────────────────────────────────────────────────────────────────────────────
+      # 1) Remove Homebrew’s rustup (it has self-update & cross-targets disabled)
+      - name: Remove Homebrew rustup
+        run: |
+          brew uninstall rustup rustup-init || true
 
+      # ──────────────────────────────────────────────────────────────────────────────
+      # 2) Install Rust via rustup (upstream), add components & both Linux targets
+      - name: Install Rust toolchain and targets
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
+          source $HOME/.cargo/env
+          rustup component add rustfmt clippy
+          rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
+
+      # ──────────────────────────────────────────────────────────────────────────────
+      # 3) Install Zig
       - name: Install Zig (via Homebrew)
         run: brew install zig
 
+      # ──────────────────────────────────────────────────────────────────────────────
+      # 4) Install cargo-zigbuild helper
       - name: Install cargo-zigbuild
         run: cargo install cargo-zigbuild
 
+      # ──────────────────────────────────────────────────────────────────────────────
+      # 5) Cross-build for Linux x86_64
       - name: Build Linux x86_64
         run: cargo zigbuild --release --target x86_64-unknown-linux-gnu
 
+      # ──────────────────────────────────────────────────────────────────────────────
+      # 6) Cross-build for Linux ARM64
       - name: Build Linux ARM64
         run: cargo zigbuild --release --target aarch64-unknown-linux-gnu
-
-      # … etc …
