@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Rust toolchain and targets
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          targets: |
+            x86_64-unknown-linux-gnu,
+            aarch64-unknown-linux-gnu
+
+      - name: Install Zig (via Homebrew)
+        run: brew install zig --HEAD  # install the latest Zig compiler :contentReference[oaicite:0]{index=0}
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild  # adds `cargo zigbuild` subcommand :contentReference[oaicite:1]{index=1}
+
+      - name: Build Linux x86_64
+        run: cargo zigbuild --release --target x86_64-unknown-linux-gnu  # glibc 2.17+ default :contentReference[oaicite:2]{index=2}
+
+      - name: Build Linux ARM64
+        run: cargo zigbuild --release --target aarch64-unknown-linux-gnu
+
+      # … you can add Windows builds here similarly, e.g. using msys2 or zig …

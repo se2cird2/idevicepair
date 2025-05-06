@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = [
+    "ffi",
+    "idevice",
+    "tools",
+]
+
+# Use the local `idevice/` crate everywhere with the right features:
+[patch.crates-io]
+idevice = { path = "idevice" }
