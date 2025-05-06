@@ -12,37 +12,41 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # ──────────────────────────────────────────────────────────────────────────────
-      # 1) Remove Homebrew’s rustup (it has self-update & cross-targets disabled)
-      - name: Remove Homebrew rustup
+      # ───────────────────────────────────────────────────────────────────────────
+      # 1) Remove Homebrew’s broken rustup/rustup-init packages
+      - name: Uninstall Homebrew rustup
         run: |
           brew uninstall rustup rustup-init || true
+          # Homebrew’s rustup and rustup-init conflict; removing them lets us install upstream rustup cleanly :contentReference[oaicite:4]{index=4}
 
-      # ──────────────────────────────────────────────────────────────────────────────
-      # 2) Install Rust via rustup (upstream), add components & both Linux targets
+      # ───────────────────────────────────────────────────────────────────────────
+      # 2) Install Rust via the official rustup installer
       - name: Install Rust toolchain and targets
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
           source $HOME/.cargo/env
           rustup component add rustfmt clippy
           rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
+          # This gives us a full-featured rustup with cross-target support :contentReference[oaicite:5]{index=5}
 
-      # ──────────────────────────────────────────────────────────────────────────────
-      # 3) Install Zig
+      # ───────────────────────────────────────────────────────────────────────────
+      # 3) Install Zig for linking
       - name: Install Zig (via Homebrew)
         run: brew install zig
+        # Installs the latest stable Zig; no need for --HEAD :contentReference[oaicite:6]{index=6}
 
-      # ──────────────────────────────────────────────────────────────────────────────
+      # ───────────────────────────────────────────────────────────────────────────
       # 4) Install cargo-zigbuild helper
       - name: Install cargo-zigbuild
         run: cargo install cargo-zigbuild
+        # Adds the `cargo zigbuild` subcommand
 
-      # ──────────────────────────────────────────────────────────────────────────────
+      # ───────────────────────────────────────────────────────────────────────────
       # 5) Cross-build for Linux x86_64
       - name: Build Linux x86_64
         run: cargo zigbuild --release --bin pair --target x86_64-unknown-linux-gnu
 
-      # ──────────────────────────────────────────────────────────────────────────────
+      # ───────────────────────────────────────────────────────────────────────────
       # 6) Cross-build for Linux ARM64
       - name: Build Linux ARM64
         run: cargo zigbuild --release --bin pair --target aarch64-unknown-linux-gnu
