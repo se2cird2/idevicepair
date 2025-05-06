@@ -1,6 +1,8 @@
 name: CI
 
-on: [push]
+on:
+  push:
+    branches: [ main ]
 
 env:
   BINARY_NAME: your_binary_name
@@ -12,19 +14,30 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu; tool: zig
-          - target: aarch64-unknown-linux-gnu; tool: zig
-          - target: x86_64-apple-darwin;       tool: native
-          - target: aarch64-apple-darwin;      tool: native
-          - target: x86_64-pc-windows-gnu;     tool: mingw
+          # Linux static builds via Zig
+          - target: x86_64-unknown-linux-gnu
+            tool: zig
+          - target: aarch64-unknown-linux-gnu
+            tool: zig
+
+          # macOS builds (arch-specific)
+          - target: x86_64-apple-darwin
+            tool: native
+          - target: aarch64-apple-darwin
+            tool: native
+
+          # Windows GNU cross-compile
+          - target: x86_64-pc-windows-gnu
+            tool: mingw
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v3
 
       - name: Uninstall Homebrew rustup
         run: brew uninstall rustup rustup-init || true
 
-      - name: Install Rust & Target ${{ matrix.target }}
+      - name: Install Rust & Add Target
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
           source $HOME/.cargo/env
@@ -45,30 +58,13 @@ jobs:
             cargo build    --release --package $PACKAGE_NAME --target ${{ matrix.target }}
           fi
 
-  universal:
-    needs:
-      - build  # it will run after both macOS matrix entries complete
-    if: ${{ always() && contains(matrix.include.*.target, 'apple-darwin') }}
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Create Universal
-        run: |
-          mkdir -p target/universal/release
-          lipo \
-            target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }} \
-            target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }} \
-            -create -output target/universal/release/${{ env.BINARY_NAME }}
-
   upload:
-    needs: [build, universal]
+    needs: build
     runs-on: macos-latest
     steps:
-      - uses: actions/upload-artifact@v4
+      - name: Upload all builds
+        uses: actions/upload-artifact@v4
         with:
           name: all-binaries
           path: |
-            target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
-            target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
-            target/universal/release/${{ env.BINARY_NAME }}
-            target/x86_64-pc-windows-gnu/release/${{ env.BINARY_NAME }}.exe
+            **/release/${{ env.BINARY_NAME }}*
