@@ -1,0 +1,105 @@
+[package]
+name        = "idevice-tools"
+version     = "0.1.0"
+edition     = "2021"
+license     = "MIT"
+authors     = ["Jackson Coxson"]
+description = "Rust binary tools to interact with services on iOS devices."
+repository  = "https://github.com/jkcoxson/idevice"
+keywords    = ["lockdownd", "ios", "pair", "gui", "utilities"]
+
+# 
+# All of your tools:
+# 
+[[bin]]
+name = "ideviceinfo"
+path = "src/ideviceinfo.rs"
+
+[[bin]]
+name = "heartbeat_client"
+path = "src/heartbeat_client.rs"
+
+[[bin]]
+name = "instproxy"
+path = "src/instproxy.rs"
+
+[[bin]]
+name = "mounter"
+path = "src/mounter.rs"
+
+[[bin]]
+name = "core_device_proxy_tun"
+path = "src/core_device_proxy_tun.rs"
+
+[[bin]]
+name = "idevice_id"
+path = "src/idevice_id.rs"
+
+[[bin]]
+name = "process_control"
+path = "src/process_control.rs"
+
+[[bin]]
+name = "dvt_packet_parser"
+path = "src/dvt_packet_parser.rs"
+
+[[bin]]
+name = "remotexpc"
+path = "src/remotexpc.rs"
+
+[[bin]]
+name = "debug_proxy"
+path = "src/debug_proxy.rs"
+
+[[bin]]
+name = "misagent"
+path = "src/misagent.rs"
+
+[[bin]]
+name = "location_simulation"
+path = "src/location_simulation.rs"
+
+[[bin]]
+name = "afc"
+path = "src/afc.rs"
+
+[[bin]]
+name = "amfi"
+path = "src/amfi.rs"
+
+# your new GUI pairing tool:
+[[bin]]
+name = "pair"
+path = "src/pair.rs"
+
+# 
+# Shared dependencies for all tools:
+# 
+[dependencies]
+idevice        = { path = "../idevice", features = ["full"] }
+tokio          = { version = "1.43", features = ["macros", "rt-multi-thread", "time", "io-util"] }
+log            = "0.4"
+env_logger     = "0.11"
+uuid           = { version = "1", features = ["v4"] }
+
+# 
+# GUI / serialization deps (for src/pair.rs):
+# 
+crossbeam      = "0.8"        # for crossbeam::channel::{unbounded, }
+eframe         = "0.31"       # re-exports egui, App, NativeOptions
+rfd            = "0.15"       # FileDialog for folder picking
+serde          = { version = "1.0", features = ["derive"] }
+serde_json     = "1.0"         # prefs read/write
+directories    = "4.0"         # ProjectDirs for prefs file
+
+# (you can remove clap if youre not using it in pair.rs)
+clap           = { version = "4.5", optional = true }
+
+# 
+# tuning dev build of the idevice lib
+# 
+[profile.dev.package.idevice]
+opt-level = 3
+
+[profile.dev]
+opt-level = 3
