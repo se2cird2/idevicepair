@@ -85,7 +85,7 @@ uuid           = { version = "1", features = ["v4"] }
 # GUI / serialization deps (for src/pair.rs):
 # 
 crossbeam      = "0.8"        # for crossbeam::channel::{unbounded, }
-eframe = { version = "0.30", default-features = false, features = ["wgpu"] }
+eframe         = { version = "0.31", features = ["glow", "wgpu"] }
 rfd            = "0.15"       # FileDialog for folder picking
 serde          = { version = "1.0", features = ["derive"] }
 serde_json     = "1.0"         # prefs read/write
