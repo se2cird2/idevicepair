@@ -3,200 +3,170 @@ name: CI
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 env:
-  BINARY_NAME: pair
+  BINARY: pair
 
+###############################################################################
+# 1) Checkout & Cache
+###############################################################################
 jobs:
-  # ────────────────────────────────────────────────────────────────────────────
-  # 1) Checkout & Cache Dependencies
-  checkout-and-cache:
+  checkout:
     name: 🔄 Checkout & Cache
     runs-on: ubuntu-latest
     outputs:
-      cache-key: ${{ steps.cache-key.outputs.key }}
+      cache-key: ${{ steps.cache-crates.outputs.cache-hit }}
     steps:
-      - name: 📥 Checkout code
+      - name: 📥 Checkout repo
         uses: actions/checkout@v3
 
-      - name: 🔑 Compute cache key
-        id: cache-key
-        run: echo "::set-output name=key::$(date +%Y-%m-%d)-${{ hashFiles('**/Cargo.lock') }}"
-
-      - name: 📦 Cache crates.io index and Git repos
+      - name: ⚙️ Cache crates.io index and git
+        id: cache-crates
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ steps.cache-key.outputs.key }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: 🗄 Cache built targets
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-target-${{ steps.cache-key.outputs.key }}
-
-  # ────────────────────────────────────────────────────────────────────────────
-  # 2) Lint (rustfmt + clippy)
+###############################################################################
+# 2) Lint (rustfmt + clippy)
+###############################################################################
   lint:
-    name: 🧹 Lint & Format
+    name: 📝 Lint & Format Check
     runs-on: ubuntu-latest
-    needs: checkout-and-cache
+    needs: checkout
     steps:
-      - uses: actions/checkout@v3
-      - name: ⚙️ Set up Rust
+      - uses: actions/checkout@v3  # minimal checkout
+      - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-          components: rustfmt, clippy
-      - name: 🔍 Check formatting
-        run: cargo fmt -- --check
-      - name: 🚨 Run Clippy
-        run: cargo clippy --all-targets -- -D warnings
+          profile: minimal
+      - name: rustfmt check
+        run: cargo fmt --all -- --check
+      - name: clippy (deny warnings)
+        run: cargo clippy --all -- -D warnings
 
-  # ────────────────────────────────────────────────────────────────────────────
-  # 3) Build Linux x86_64
-  build-linux-x64:
-    name: 🐧 Build Linux x86_64
+###############################################################################
+# 3) Test (on host)
+###############################################################################
+  test:
+    name: ✅ Run Tests
     runs-on: ubuntu-latest
-    needs: checkout-and-cache
+    needs: [checkout, lint]
     steps:
       - uses: actions/checkout@v3
-      - name: ⚙️ Set up Rust (x86_64)
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - name: Run unit & integration tests
+        run: cargo test --all -- --color=always
+
+###############################################################################
+# 4) Build (matrix across native runners)
+###############################################################################
+  build:
+    name: 🛠 Build • ${{ matrix.os }} / ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    needs: [checkout, lint, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            art: linux-x64
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            art: linux-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            art: macos-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            art: macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            art: windows-msvc
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v3
+
+      - name: ⚙️ Set up Rust & target
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
-          target: x86_64-unknown-linux-gnu
-      - name: 🔨 Compile
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-unknown-linux-gnu
-      - name: 📤 Upload artifact
+          target: ${{ matrix.target }}
+
+      - name: 🛠 Build ${{ env.BINARY }} (release, ${{ matrix.target }})
+        run: |
+          cargo build --release --bin ${{ env.BINARY }} --target ${{ matrix.target }}
+
+      - name: 📤 Upload ${{ matrix.art }}
         uses: actions/upload-artifact@v4
         with:
-          name: linux-x64
-          path: target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
+          name: ${{ matrix.art }}
+          path: target/${{ matrix.target }}/release/${{ env.BINARY }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
 
-  # ────────────────────────────────────────────────────────────────────────────
-  # 4) Build Linux ARM64
-  build-linux-arm64:
-    name: 🐧 Build Linux ARM64
-    runs-on: ubuntu-22.04-arm
-    needs: checkout-and-cache
-    steps:
-      - uses: actions/checkout@v3
-      - name: ⚙️ Set up Rust (ARM64)
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: aarch64-unknown-linux-gnu
-      - name: 🔨 Compile
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-unknown-linux-gnu
-      - name: 📤 Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-arm64
-          path: target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
-
-  # ────────────────────────────────────────────────────────────────────────────
-  # 5) Build macOS x86_64 slice
-  build-macos-x64:
-    name: 🍎 Build macOS x86_64
-    runs-on: macos-latest
-    needs: checkout-and-cache
-    steps:
-      - uses: actions/checkout@v3
-      - name: ⚙️ Set up Rust (macOS x64)
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: x86_64-apple-darwin
-      - name: 🍺 Install dependencies
-        run: brew install libimobiledevice libplist libusbmuxd
-      - name: 🔨 Compile
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-apple-darwin
-      - name: 📤 Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-x64
-          path: target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
-
-  # ────────────────────────────────────────────────────────────────────────────
-  # 6) Build macOS ARM64 slice
-  build-macos-arm64:
-    name: 🍎 Build macOS ARM64
-    runs-on: macos-latest
-    needs: checkout-and-cache
-    steps:
-      - uses: actions/checkout@v3
-      - name: ⚙️ Set up Rust (macOS ARM64)
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: aarch64-apple-darwin
-      - name: 🍺 Install dependencies
-        run: brew install libimobiledevice libplist libusbmuxd
-      - name: 🔨 Compile
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-apple-darwin
-      - name: 📤 Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-arm64
-          path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
-
-  # ────────────────────────────────────────────────────────────────────────────
-  # 7) Package macOS Universal
+###############################################################################
+# 5) Package macOS universal (after both slices)
+###############################################################################
   package-macos:
     name: 🍏 Package macOS Universal
-    needs:
-      - build-macos-x64
-      - build-macos-arm64
     runs-on: macos-latest
+    needs: build
+    if: always()
     steps:
-      - name: 🔽 Download x64 slice
+      - name: 🔽 Download intel slice
         uses: actions/download-artifact@v4
         with:
           name: macos-x64
           path: slice-x64
-      - name: 🔽 Download ARM64 slice
+        continue-on-error: true
+
+      - name: 🔽 Download arm slice
         uses: actions/download-artifact@v4
         with:
           name: macos-arm64
           path: slice-arm64
-      - name: 🔨 lipo into universal
+        continue-on-error: true
+
+      - name: 🔨 Create universal binary
         run: |
-          mkdir -p target/universal/release
-          lipo \
-            slice-x64/${{ env.BINARY_NAME }} \
-            slice-arm64/${{ env.BINARY_NAME }} \
-            -create -output target/universal/release/${{ env.BINARY_NAME }}
-      - name: 📤 Upload universal
+          if [[ -f slice-x64/${{ env.BINARY }} && -f slice-arm64/${{ env.BINARY }} ]]; then
+            mkdir -p target/universal/release
+            lipo \
+              slice-x64/${{ env.BINARY }} \
+              slice-arm64/${{ env.BINARY }} \
+              -create -output target/universal/release/${{ env.BINARY }}
+          else
+            echo "⚠️ Missing one or both macOS slices—skipping universal"
+          fi
+
+      - name: 📤 Upload macOS universal
         uses: actions/upload-artifact@v4
         with:
           name: macos-universal
-          path: target/universal/release/${{ env.BINARY_NAME }}
+          path: target/universal/release/${{ env.BINARY }}
 
-  # ────────────────────────────────────────────────────────────────────────────
-  # 8) Build Windows MSVC
-  build-windows:
-    name: 🪟 Build Windows MSVC
-    runs-on: windows-latest
-    needs: checkout-and-cache
+###############################################################################
+# 6) Final aggregation (optional)
+###############################################################################
+  upload-all:
+    name: 🗂️ Collect All Binaries
+    runs-on: ubuntu-latest
+    needs: [build, package-macos]
     steps:
-      - uses: actions/checkout@v3
-      - name: ⚙️ Set up Rust (Windows)
-        uses: actions-rs/toolchain@v1
+      - name: 🔽 Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: x86_64-pc-windows-msvc
-      - name: 🔨 Compile (single-line)
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
-      - name: 📤 Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-msvc
-          path: target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe
+          path: all-bins
+
+      - name: 📦 List artifacts
+        run: ls -R all-bins
