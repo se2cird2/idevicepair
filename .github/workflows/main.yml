@@ -87,47 +87,38 @@ jobs:
           path: target/release/bundle/appimage/${{ env.BINARY_NAME }}*.AppImage
 
   # ───────────────────────────────────────────────────────────────────────────
-  # macOS slices (Intel + ARM) + .app bundle
+# macOS slices (Intel + ARM in parallel)
   build-macos-slices:
     name: Build macOS slices
     runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64-apple-darwin
+            slice: x64
+          - arch: aarch64-apple-darwin
+            slice: arm64
     steps:
       - uses: actions/checkout@v3
 
       - name: Uninstall Homebrew rustup
         run: brew uninstall rustup rustup-init || true
 
-      - name: Set up Rust (Intel)
+      - name: Set up Rust for ${{ matrix.slice }}
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
-          target: x86_64-apple-darwin
+          target: ${{ matrix.arch }}
 
-      - name: Build Intel slice
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-apple-darwin
+      - name: Build ${{ matrix.slice }} slice
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target ${{ matrix.arch }}
 
-      - name: Set up Rust (ARM64)
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: aarch64-apple-darwin
-
-      - name: Build ARM64 slice
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-apple-darwin
-
-      - name: Upload Intel slice
+      - name: Upload ${{ matrix.slice }} slice
         uses: actions/upload-artifact@v4
         with:
-          name: macos-x64-binary
-          path: target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
-
-      - name: Upload ARM64 slice
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-arm64-binary
-          path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
+          name: macos-${{ matrix.slice }}-binary
+          path: target/${{ matrix.arch }}/release/${{ env.BINARY_NAME }}
 
   # ───────────────────────────────────────────────────────────────────────────
   # macOS universal + .app bundle
@@ -138,12 +129,14 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Download slices
+      - name: Download Intel slice
         uses: actions/download-artifact@v4
         with:
           name: macos-x64-binary
           path: slice-x64
-      - uses: actions/download-artifact@v4
+
+      - name: Download ARM64 slice
+        uses: actions/download-artifact@v4
         with:
           name: macos-arm64-binary
           path: slice-arm64
@@ -161,9 +154,7 @@ jobs:
 
       - name: Create .app bundle
         run: |
-          # Move universal binary into standard release dir
           cp target/universal/release/${{ env.BINARY_NAME }} target/release/
-          # Bundle as macOS .app
           cargo bundle --release --bin ${{ env.BINARY_NAME }} --format osx
 
       - name: Upload universal binary
