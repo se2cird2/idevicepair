@@ -1,9 +1,216 @@
-// Complete the missing parts of the worker_loop function to handle all AFC commands
+//! pair_gui  GUI front-end for the iOS pairing utility
+//! Jackson Coxson  2025
 
+use crossbeam::channel::{unbounded, Receiver, Sender};
+use eframe::{egui, App, NativeOptions};
+use egui::ScrollArea;
+use env_logger;
+use idevice::{
+    lockdown::LockdownClient,
+    usbmuxd::{UsbmuxdAddr, UsbmuxdConnection},
+    IdeviceService,
+};
+use idevice::provider::IdeviceProvider;
+use plist::{self, Value};
+use rfd::FileDialog;
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+    process::Command as SysCmd,
+    thread,
+    time::{Duration, Instant},
+};
+use tokio::runtime::Runtime;
+use uuid::Uuid;
+use directories::BaseDirs;
+
+/// Commands sent from GUI to worker
+#[derive(Debug)]
+enum Command {
+    Refresh,
+    Pair { udid: String, out_dir: PathBuf },
+    GetDeviceInfo { udid: String },
+}
+
+/// Events sent from worker to GUI
+#[derive(Debug)]
+enum GuiEvent {
+    Devices(Vec<(String, String)>), // (UDID, DisplayName)
+    Status(String),
+    DeviceInfo { udid: String, info: HashMap<String, String> },
+}
+
+/// Persistent preferences
+#[derive(Serialize, Deserialize, Default)]
+struct Prefs {
+    output_dir: Option<PathBuf>,
+}
+
+fn load_prefs() -> Prefs {
+    if let Some(base) = BaseDirs::new() {
+        let mut config_path = base.config_dir().to_path_buf();
+        config_path.push("pair_gui_prefs.json");
+        if let Ok(data) = fs::read_to_string(&config_path) {
+            if let Ok(p) = serde_json::from_str::<Prefs>(&data) {
+                return p;
+            }
+        }
+    }
+    Prefs::default()
+}
+
+/// Save preferences to disk
+fn save_prefs(prefs: &Prefs) {
+    if let Some(base) = BaseDirs::new() {
+        let mut config_dir = base.config_dir().to_path_buf();
+        let _ = fs::create_dir_all(&config_dir);
+        config_dir.push("pair_gui_prefs.json");
+        let _ = fs::write(config_dir, serde_json::to_string_pretty(prefs).unwrap());
+    }
+}
+
+/// Main application state
+struct PairApp {
+    tx: Sender<Command>,
+    rx: Receiver<GuiEvent>,
+    devices: Vec<(String, String)>,
+    selected: Option<String>,
+    status: String,
+    output_dir: PathBuf,
+    show_device_info: bool,
+    device_info: HashMap<String, HashMap<String, String>>,
+    last_tick: Instant,
+    first_frame: bool,
+}
+
+impl PairApp {
+    fn new(tx: Sender<Command>, rx: Receiver<GuiEvent>, default_dir: PathBuf) -> Self {
+        Self {
+            tx,
+            rx,
+            devices: Vec::new(),
+            selected: None,
+            status: String::new(),
+            output_dir: default_dir,
+            show_device_info: true,
+            device_info: HashMap::new(),
+            last_tick: Instant::now(),
+            first_frame: true,
+        }
+    }
+}
+
+impl App for PairApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.first_frame || self.last_tick.elapsed() > Duration::from_secs(3) {
+            let _ = self.tx.send(Command::Refresh);
+            self.last_tick = Instant::now();
+            self.first_frame = false;
+        }
+
+        while let Ok(ev) = self.rx.try_recv() {
+            match ev {
+                GuiEvent::Devices(list) => {
+                    self.devices = list;
+                    self.show_device_info = true;
+                    if let Some(sel) = &self.selected {
+                        if !self.devices.iter().any(|(udid, _)| udid == sel) {
+                            self.selected = None;
+                        }
+                    }
+                    if self.selected.is_none() && !self.devices.is_empty() {
+                        self.selected = Some(self.devices[0].0.clone());
+                    }
+                    self.status = format!("{} device(s) connected", self.devices.len());
+                    // Device info fetching is now handled in worker_loop
+                }
+                GuiEvent::Status(s) => self.status = s,
+                GuiEvent::DeviceInfo { udid, info } => {
+                    self.device_info.insert(udid.clone(), info);
+                    self.status = format!("Device info retrieved for {}", udid);
+                }
+            }
+        }
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                ui.heading("iOS Pair Utility");
+
+                ui.horizontal(|ui| {
+                    ui.label(format!("Save directory: {}", self.output_dir.display()));
+                });
+
+                ui.horizontal(|ui| {
+                    if ui.button("Refresh").clicked() {
+                        let _ = self.tx.send(Command::Refresh);
+                    }
+                    if ui.button("Browse").clicked() {
+                        if let Some(dir) = FileDialog::new().set_directory(&self.output_dir).pick_folder() {
+                            self.output_dir = dir.clone();
+                            save_prefs(&Prefs { output_dir: Some(self.output_dir.clone()) });
+                            self.status = format!("Output dir set to {}", self.output_dir.display());
+                        }
+                    }
+                    ui.separator();
+                    if ui.add_enabled(self.selected.is_some(), egui::Button::new("Pair")).clicked() {
+                        if let Some(udid) = &self.selected {
+                            let _ = self.tx.send(Command::Pair { udid: udid.clone(), out_dir: self.output_dir.clone() });
+                            self.status = format!("Pairing {}", udid);
+                        }
+                    }
+                });
+
+                ui.separator();
+                ui.label("Connected USB devices:");
+                for (udid, display) in &self.devices {
+                    ui.selectable_value(&mut self.selected, Some(udid.clone()), display);
+                }
+
+                if self.show_device_info {
+                    if let Some(udid) = &self.selected {
+                        if let Some(info) = self.device_info.get(udid) {
+                            ui.collapsing("Device Information", |ui| {
+                                for key in &[
+                                    "ProductName", "ProductVersion", "BuildVersion", "SerialNumber", "DeviceName", "UniqueDeviceID",
+                                ] {
+                                    if let Some(value) = info.get(*key) {
+                                        ui.horizontal(|ui| {
+                                            ui.label(format!("{}: ", key));
+                                            ui.monospace(value);
+                                        });
+                                    }
+                                }
+                                ui.separator();
+                                ui.collapsing("All Properties", |ui| {
+                                    let mut keys: Vec<&String> = info.keys().collect();
+                                    keys.sort();
+                                    for key in keys {
+                                        if !["ProductName", "ProductVersion", "BuildVersion", "SerialNumber", "DeviceName", "UniqueDeviceID"].contains(&key.as_str()) {
+                                            if let Some(value) = info.get(key) {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(format!("{}: ", key));
+                                                    ui.monospace(value);
+                                                });
+                                            }
+                                        }
+                                    }
+                                });
+                            });
+                        }
+                    }
+                }
+
+                ui.separator();
+                ui.label(&self.status);
+            });
+        });
+    }
+}
+
+/// Background worker loop handling commands
 async fn worker_loop(rx: Receiver<Command>, tx: Sender<GuiEvent>) {
-    // Create a cache of AFC clients to avoid recreating them for each operation
-    let afc_clients: Arc<Mutex<HashMap<String, AfcClient>>> = Arc::new(Mutex::new(HashMap::new()));
-    
     loop {
         match rx.recv() {
             Ok(Command::Refresh) => {
@@ -49,511 +256,179 @@ async fn worker_loop(rx: Receiver<Command>, tx: Sender<GuiEvent>) {
                     Err(e) => { let _ = tx.send(GuiEvent::Status(format!("Error getting device info: {e:?}"))); }
                 }
             }
-            // AFC Commands
-            Ok(Command::AfcListDir { udid, path }) => {
-                let _ = tx.send(GuiEvent::Status(format!("Listing directory: {path}")));
-                match get_afc_client(&udid, &afc_clients).await {
-                    Ok(mut client) => {
-                        match client.list_dir(&path).await {
-                            Ok(entries) => {
-                                let _ = tx.send(GuiEvent::AfcDirListing { path, entries });
-                                
-                                // Add client back to cache
-                                let mut clients = afc_clients.lock().unwrap();
-                                clients.insert(udid, client);
-                            },
-                            Err(e) => { 
-                                let _ = tx.send(GuiEvent::Status(format!("Error listing directory: {e:?}"))); 
-                            }
-                        }
-                    },
-                    Err(e) => { let _ = tx.send(GuiEvent::Status(format!("Error connecting to AFC: {e:?}"))); }
-                }
-            }
-            Ok(Command::AfcMkDir { udid, path }) => {
-                let _ = tx.send(GuiEvent::Status(format!("Creating directory: {path}")));
-                match get_afc_client(&udid, &afc_clients).await {
-                    Ok(mut client) => {
-                        match client.mk_dir(&path).await {
-                            Ok(_) => {
-                                let _ = tx.send(GuiEvent::AfcOperationResult { 
-                                    operation: "Create Directory".to_string(),
-                                    success: true,
-                                    message: path
-                                });
-                                
-                                // Add client back to cache
-                                let mut clients = afc_clients.lock().unwrap();
-                                clients.insert(udid, client);
-                            },
-                            Err(e) => { 
-                                let _ = tx.send(GuiEvent::AfcOperationResult { 
-                                    operation: "Create Directory".to_string(),
-                                    success: false,
-                                    message: format!("{e:?}") 
-                                });
-                            }
-                        }
-                    },
-                    Err(e) => { let _ = tx.send(GuiEvent::Status(format!("Error connecting to AFC: {e:?}"))); }
-                }
-            }
-            Ok(Command::AfcDownload { udid, path, save_path }) => {
-                let _ = tx.send(GuiEvent::Status(format!("Downloading: {path}")));
-                match get_afc_client(&udid, &afc_clients).await {
-                    Ok(mut client) => {
-                        match client.open(&path, AfcFopenMode::RdOnly).await {
-                            Ok(mut file) => {
-                                match file.read().await {
-                                    Ok(data) => {
-                                        match tokio::fs::write(&save_path, &data).await {
-                                            Ok(_) => {
-                                                let _ = tx.send(GuiEvent::AfcOperationResult { 
-                                                    operation: "Download".to_string(),
-                                                    success: true,
-                                                    message: format!("Saved to {}", save_path.display())
-                                                });
-                                            },
-                                            Err(e) => {
-                                                let _ = tx.send(GuiEvent::AfcOperationResult { 
-                                                    operation: "Download".to_string(),
-                                                    success: false,
-                                                    message: format!("Failed to write file: {e:?}")
-                                                });
-                                            }
-                                        }
-                                    },
-                                    Err(e) => {
-                                        let _ = tx.send(GuiEvent::AfcOperationResult { 
-                                            operation: "Download".to_string(),
-                                            success: false,
-                                            message: format!("Failed to read file: {e:?}")
-                                        });
-                                    }
-                                }
-                                
-                                // Add client back to cache
-                                let mut clients = afc_clients.lock().unwrap();
-                                clients.insert(udid, client);
-                            },
-                            Err(e) => {
-                                let _ = tx.send(GuiEvent::AfcOperationResult { 
-                                    operation: "Download".to_string(),
-                                    success: false,
-                                    message: format!("Failed to open file: {e:?}")
-                                });
-                            }
-                        }
-                    },
-                    Err(e) => { let _ = tx.send(GuiEvent::Status(format!("Error connecting to AFC: {e:?}"))); }
-                }
-            }
-            Ok(Command::AfcUpload { udid, file_path, device_path }) => {
-                let _ = tx.send(GuiEvent::Status(format!("Uploading to: {device_path}")));
-                match get_afc_client(&udid, &afc_clients).await {
-                    Ok(mut client) => {
-                        match tokio::fs::read(&file_path).await {
-                            Ok(bytes) => {
-                                match client.open(&device_path, AfcFopenMode::WrOnly).await {
-                                    Ok(mut file) => {
-                                        match file.write(&bytes).await {
-                                            Ok(_) => {
-                                                let _ = tx.send(GuiEvent::AfcOperationResult { 
-                                                    operation: "Upload".to_string(),
-                                                    success: true,
-                                                    message: device_path
-                                                });
-                                            },
-                                            Err(e) => {
-                                                let _ = tx.send(GuiEvent::AfcOperationResult { 
-                                                    operation: "Upload".to_string(),
-                                                    success: false,
-                                                    message: format!("Failed to write to device: {e:?}")
-                                                });
-                                            }
-                                        }
-                                        
-                                        // Add client back to cache
-                                        let mut clients = afc_clients.lock().unwrap();
-                                        clients.insert(udid, client);
-                                    },
-                                    Err(e) => {
-                                        let _ = tx.send(GuiEvent::AfcOperationResult { 
-                                            operation: "Upload".to_string(),
-                                            success: false,
-                                            message: format!("Failed to open file on device: {e:?}")
-                                        });
-                                    }
-                                }
-                            },
-                            Err(e) => {
-                                let _ = tx.send(GuiEvent::AfcOperationResult { 
-                                    operation: "Upload".to_string(),
-                                    success: false,
-                                    message: format!("Failed to read local file: {e:?}")
-                                });
-                            }
-                        }
-                    },
-                    Err(e) => { let _ = tx.send(GuiEvent::Status(format!("Error connecting to AFC: {e:?}"))); }
-                }
-            }
-            Ok(Command::AfcRemove { udid, path }) => {
-                let _ = tx.send(GuiEvent::Status(format!("Deleting: {path}")));
-                match get_afc_client(&udid, &afc_clients).await {
-                    Ok(mut client) => {
-                        match client.remove(&path).await {
-                            Ok(_) => {
-                                let _ = tx.send(GuiEvent::AfcOperationResult { 
-                                    operation: "Delete".to_string(),
-                                    success: true,
-                                    message: path
-                                });
-                                
-                                // Add client back to cache
-                                let mut clients = afc_clients.lock().unwrap();
-                                clients.insert(udid, client);
-                            },
-                            Err(e) => {
-                                // Try remove_all which works for directories
-                                match client.remove_all(&path).await {
-                                    Ok(_) => {
-                                        let _ = tx.send(GuiEvent::AfcOperationResult { 
-                                            operation: "Delete".to_string(),
-                                            success: true,
-                                            message: format!("Recursively deleted {}", path)
-                                        });
-                                        
-                                        // Add client back to cache
-                                        let mut clients = afc_clients.lock().unwrap();
-                                        clients.insert(udid, client);
-                                    },
-                                    Err(e2) => {
-                                        let _ = tx.send(GuiEvent::AfcOperationResult { 
-                                            operation: "Delete".to_string(),
-                                            success: false,
-                                            message: format!("Failed to delete: {e:?} (recursive: {e2:?})")
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    Err(e) => { let _ = tx.send(GuiEvent::Status(format!("Error connecting to AFC: {e:?}"))); }
-                }
-            }
-            Ok(Command::AfcGetFileInfo { udid, path }) => {
-                let _ = tx.send(GuiEvent::Status(format!("Getting info for: {path}")));
-                match get_afc_client(&udid, &afc_clients).await {
-                    Ok(mut client) => {
-                        match client.get_file_info(&path).await {
-                            Ok(info) => {
-                                // Convert to hashmap of strings
-                                let string_info: HashMap<String, String> = info.into_iter()
-                                    .map(|(k, v)| (k, v.to_string()))
-                                    .collect();
-                                
-                                let _ = tx.send(GuiEvent::AfcFileInfo { 
-                                    path,
-                                    info: string_info
-                                });
-                                
-                                // Add client back to cache
-                                let mut clients = afc_clients.lock().unwrap();
-                                clients.insert(udid, client);
-                            },
-                            Err(e) => {
-                                let _ = tx.send(GuiEvent::Status(format!("Failed to get file info: {e:?}")));
-                            }
-                        }
-                    },
-                    Err(e) => { let _ = tx.send(GuiEvent::Status(format!("Error connecting to AFC: {e:?}"))); }
-                }
-            }
-            Ok(Command::AfcGetDeviceInfo { udid }) => {
-                let _ = tx.send(GuiEvent::Status("Getting AFC device info...".to_string()));
-                match get_afc_client(&udid, &afc_clients).await {
-                    Ok(mut client) => {
-                        match client.get_device_info().await {
-                            Ok(info) => {
-                                // Convert to hashmap of strings
-                                let string_info: HashMap<String, String> = info.into_iter()
-                                    .map(|(k, v)| (k, v.to_string()))
-                                    .collect();
-                                
-                                let _ = tx.send(GuiEvent::AfcDeviceInfo { 
-                                    info: string_info
-                                });
-                                
-                                // Add client back to cache
-                                let mut clients = afc_clients.lock().unwrap();
-                                clients.insert(udid, client);
-                            },
-                            Err(e) => {
-                                let _ = tx.send(GuiEvent::Status(format!("Failed to get AFC device info: {e:?}")));
-                            }
-                        }
-                    },
-                    Err(e) => { let _ = tx.send(GuiEvent::Status(format!("Error connecting to AFC: {e:?}"))); }
-                }
-            }
-            Err(e) => {
-                eprintln!("Worker channel error: {e:?}");
-                break;
-            }
+            Err(_) => break,
         }
     }
 }
 
-// Helper function to get or create an AFC client for a device
-async fn get_afc_client(
-    udid: &str, 
-    cache: &Arc<Mutex<HashMap<String, AfcClient>>>
-) -> Result<AfcClient, Box<dyn std::error::Error>> {
-    // Check if we have a cached client
-    {
-        let clients = cache.lock().unwrap();
-        if let Some(client) = clients.get(udid) {
-            return Ok(client.clone());
-        }
-    }
-    
-    // No cached client, create a new one
-    let provider = common::get_provider(
-        Some(&udid.to_string()), 
-        None, 
-        None, 
-        "afc-pair-gui"
-    ).await?;
-    
-    let client = AfcClient::connect(&*provider).await?;
-    Ok(client)
+/// Scan connected USB devices
+async fn scan_devices() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let mut mux = UsbmuxdConnection::default().await?;
+    let devices = mux.get_devices().await?;
+    Ok(devices.into_iter()
+        .filter(|d| d.connection_type == idevice::usbmuxd::Connection::Usb)
+        .map(|d| d.udid)
+        .collect())
 }
 
-// Helper function to reveal a file/directory in the OS file browser
+/// Retrieve just the device name
+async fn get_device_name(udid: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let mut mux = UsbmuxdConnection::default().await?;
+    let dev = mux.get_device(udid).await?;
+    let provider = dev.to_provider(UsbmuxdAddr::default(), "pair-gui");
+    let mut lockdown = LockdownClient::connect(&provider).await?;
+    if let Ok(pf) = provider.get_pairing_file().await {
+        let _ = lockdown.start_session(&pf).await;
+    }
+    match lockdown.get_value("DeviceName", None).await {
+        Ok(val) => if let Value::String(s) = val { Ok(s) } else { Ok(udid.to_string()) },
+        Err(_) => Ok(udid.to_string()),
+    }
+}
+
+/// Retrieve just the device model identifier
+async fn get_device_model(udid: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let mut mux = UsbmuxdConnection::default().await?;
+    let dev = mux.get_device(udid).await?;
+    let provider = dev.to_provider(UsbmuxdAddr::default(), "pair-gui");
+    let mut lockdown = LockdownClient::connect(&provider).await?;
+    if let Ok(pf) = provider.get_pairing_file().await {
+        let _ = lockdown.start_session(&pf).await;
+    }
+    match lockdown.get_value("ProductType", None).await {
+        Ok(val) => if let Value::String(s) = val { Ok(s) } else { Ok(String::new()) },
+        Err(_) => Ok(String::new()),
+    }
+}
+
+/// Pair with a device
+async fn pair_one(
+    output_dir: &Path,
+    udid: &str,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let mut mux = UsbmuxdConnection::default().await?;
+    let dev = mux.get_device(udid).await?;
+    let provider = dev.to_provider(UsbmuxdAddr::default(), "pair-gui");
+    let mut lockdown = LockdownClient::connect(&provider).await?;
+
+    let host_id = Uuid::new_v4().to_string().to_uppercase();
+    let buid = mux.get_buid().await?;
+    let mut pf = lockdown.pair(host_id, buid).await?;
+    lockdown.start_session(&pf).await?;
+
+    pf.udid = Some(dev.udid.clone());
+    let data = pf.serialize()?;
+    
+    // Use correct filename format: {udid}.mobiledevicepairing
+    let out_path = output_dir.join(format!("{}.mobiledevicepairing", udid));
+    std::fs::write(&out_path, data)?;
+    
+    // Return the directory path instead of file path
+    Ok(output_dir.to_path_buf())
+}
+
+/// Retrieve device info
+async fn get_device_info(udid: &str) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
+    let mut mux = UsbmuxdConnection::default().await?;
+    let dev = mux.get_device(udid).await?;
+    let provider = dev.to_provider(UsbmuxdAddr::default(), "pair-gui");
+    let mut lockdown = LockdownClient::connect(&provider).await?;
+    if let Ok(pf) = provider.get_pairing_file().await {
+        let _ = lockdown.start_session(&pf).await;
+    }
+    let dict = lockdown.get_all_values().await?;
+    let mut info = HashMap::new();
+    extract_values("", &plist::Value::Dictionary(dict.clone()), &mut info);
+    if let Ok(value) = lockdown.get_value("ProductVersion", None).await {
+        info.insert("ProductVersion".to_string(), process_value(&value));
+    }
+    if let Ok(device_type) = lockdown.idevice.get_type().await {
+        info.insert("DeviceType".to_string(), device_type);
+    }
+    Ok(info)
+}
+
+/// Recursively extract plist values into flat key-value map
+fn extract_values(prefix: &str, value: &plist::Value, info: &mut HashMap<String, String>) {
+    match value {
+        plist::Value::Dictionary(dict) => {
+            for (k, v) in dict {
+                let new_prefix = if prefix.is_empty() { k.clone() } else { format!("{}.{}", prefix, k) };
+                extract_values(&new_prefix, v, info);
+                info.insert(new_prefix.clone(), process_value(v));
+            }
+        }
+        plist::Value::Array(arr) => {
+            if arr.len() <= 10 {
+                for (i, v) in arr.iter().enumerate() {
+                    let idx_prefix = format!("{}[{}]", prefix, i);
+                    extract_values(&idx_prefix, v, info);
+                    info.insert(idx_prefix, process_value(v));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Format plist values for display
+fn process_value(value: &plist::Value) -> String {
+    match value {
+        plist::Value::String(s) => s.clone(),
+        plist::Value::Integer(i) => i.to_string(),
+        plist::Value::Boolean(b) => b.to_string(),
+        plist::Value::Data(d) => format!("[{} bytes]", d.len()),
+        plist::Value::Date(dt) => format!("{:?}", dt),
+        plist::Value::Uid(u) => format!("{:?}", u),
+        _ => format!("{:?}", value),
+    }
+}
+
+/// Reveal file or directory in OS file browser
 fn reveal_in_file_browser(path: &Path) {
     #[cfg(target_os = "windows")]
     {
-        let _ = SysCmd::new("explorer")
-            .args(["/select,", &path.to_string_lossy()])
-            .spawn();
+        let _ = SysCmd::new("explorer").arg(path).spawn();
     }
-    
     #[cfg(target_os = "macos")]
     {
-        let _ = SysCmd::new("open")
-            .args(["-R", &path.to_string_lossy()])
-            .spawn();
+        let _ = SysCmd::new("open").arg(path).spawn();
     }
-    
-    #[cfg(target_os = "linux")]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        if let Some(parent) = path.parent() {
-            // Try common file managers
-            for cmd in &["xdg-open", "nautilus", "dolphin", "thunar", "pcmanfm"] {
-                if SysCmd::new(cmd)
-                    .arg(parent.to_string_lossy().to_string())
-                    .spawn()
-                    .is_ok() {
-                    break;
-                }
-            }
+        if let Some(dir) = path.parent() {
+            let _ = SysCmd::new("xdg-open").arg(dir).spawn();
         }
     }
 }
 
-// Add a utility function to scan for devices
-async fn scan_devices() -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let connection = UsbmuxdConnection::default();
-    let devices = connection.get_devices().await?;
-    Ok(devices.into_iter().map(|d| d.udid).collect())
-}
-
-// Get device name
-async fn get_device_name(udid: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let provider = common::get_provider(
-        Some(&udid.to_string()), 
-        None, 
-        None, 
-        "lockdown-info"
-    ).await?;
-    
-    let client = LockdownClient::connect(&*provider).await?;
-    let name = client.get_device_name().await?;
-    Ok(name)
-}
-
-// Get device model
-async fn get_device_model(udid: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let provider = common::get_provider(
-        Some(&udid.to_string()), 
-        None, 
-        None, 
-        "lockdown-info"
-    ).await?;
-    
-    let client = LockdownClient::connect(&*provider).await?;
-    if let Ok(value) = client.get_value("", "ProductType").await {
-        if let Some(Value::String(product_type)) = value {
-            return Ok(product_type);
-        }
-    }
-    
-    Ok("Unknown".to_string())
-}
-
-// Get detailed device info
-async fn get_device_info(udid: &str) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
-    let provider = common::get_provider(
-        Some(&udid.to_string()), 
-        None, 
-        None, 
-        "lockdown-info"
-    ).await?;
-    
-    let client = LockdownClient::connect(&*provider).await?;
-    let value = client.get_value("", "").await?;
-    
-    fn extract_values(value: &Value, prefix: &str) -> HashMap<String, String> {
-        let mut result = HashMap::new();
-        
-        match value {
-            Value::Dictionary(dict) => {
-                for (key, val) in dict {
-                    match val {
-                        Value::String(s) => {
-                            let full_key = if prefix.is_empty() {
-                                key.clone()
-                            } else {
-                                format!("{}.{}", prefix, key)
-                            };
-                            result.insert(full_key, s.clone());
-                        }
-                        Value::Integer(i) => {
-                            let full_key = if prefix.is_empty() {
-                                key.clone()
-                            } else {
-                                format!("{}.{}", prefix, key)
-                            };
-                            result.insert(full_key, i.to_string());
-                        }
-                        Value::Real(r) => {
-                            let full_key = if prefix.is_empty() {
-                                key.clone()
-                            } else {
-                                format!("{}.{}", prefix, key)
-                            };
-                            result.insert(full_key, r.to_string());
-                        }
-                        Value::Boolean(b) => {
-                            let full_key = if prefix.is_empty() {
-                                key.clone()
-                            } else {
-                                format!("{}.{}", prefix, key)
-                            };
-                            result.insert(full_key, b.to_string());
-                        }
-                        Value::Date(d) => {
-                            let full_key = if prefix.is_empty() {
-                                key.clone()
-                            } else {
-                                format!("{}.{}", prefix, key)
-                            };
-                            result.insert(full_key, format!("{:?}", d));
-                        }
-                        Value::Data(d) => {
-                            let full_key = if prefix.is_empty() {
-                                key.clone()
-                            } else {
-                                format!("{}.{}", prefix, key)
-                            };
-                            result.insert(full_key, format!("<{} bytes>", d.len()));
-                        }
-                        Value::Dictionary(_) | Value::Array(_) => {
-                            let new_prefix = if prefix.is_empty() {
-                                key.clone()
-                            } else {
-                                format!("{}.{}", prefix, key)
-                            };
-                            let nested = extract_values(val, &new_prefix);
-                            result.extend(nested);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-        
-        result
-    }
-    
-    Ok(extract_values(&value, ""))
-}
-
-// Pairing function
-async fn pair_one(out_dir: &Path, udid: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let provider = common::get_provider(
-        Some(&udid.to_string()), 
-        None, 
-        None, 
-        "lockdown-info"
-    ).await?;
-    
-    let client = LockdownClient::connect(&*provider).await?;
-    
-    // Create a pairing record
-    let pair_record = client.pair().await?;
-    
-    // Generate a UUID for the file
-    let id = Uuid::new_v4();
-    
-    // Create output directory if it doesn't exist
-    fs::create_dir_all(out_dir)?;
-    
-    // Save to file
-    let file_path = out_dir.join(format!("{}.plist", id));
-    let file = std::fs::File::create(&file_path)?;
-    
-    plist::to_writer_xml(file, &pair_record)?;
-    
-    Ok(file_path)
-}
-
-// Main function to launch the app
-fn main() -> Result<(), eframe::Error> {
+/// Entry point
+fn main() -> eframe::Result<()> {
     env_logger::init();
-    
-    // Load preferences for default directories
     let prefs = load_prefs();
-    let default_dir = prefs.output_dir.unwrap_or_else(|| {
-        if let Some(base_dirs) = BaseDirs::new() {
-            base_dirs.download_dir().to_path_buf()
-        } else {
-            PathBuf::from(".")
-        }
-    });
-    
-    // Create channels for communication between GUI and worker
-    let (tx_cmd, rx_cmd) = unbounded();
-    let (tx_gui, rx_gui) = unbounded();
-    
-    // Spawn worker thread
+    let default_dir = prefs.output_dir.clone().unwrap_or_else(|| canonical_or_create("pairings"));
+    let (tx_cmd, rx_cmd) = unbounded::<Command>();
+    let (tx_evt, rx_evt) = unbounded::<GuiEvent>();
     thread::spawn(move || {
-        let rt = Runtime::new().unwrap();
-        rt.block_on(worker_loop(rx_cmd, tx_gui));
+        let rt = Runtime::new().expect("Tokio runtime failed");
+        rt.block_on(worker_loop(rx_cmd, tx_evt));
     });
-    
-    // Launch the GUI
-    let app = PairApp::new(tx_cmd.clone(), rx_gui, default_dir, prefs.last_afc_path);
-    
-    let native_options = NativeOptions {
-        initial_window_size: Some(egui::vec2(800.0, 600.0)),
-        ..Default::default()
-    };
-    
-    // Send initial refresh command
-    let _ = tx_cmd.send(Command::Refresh);
-    
-    eframe::run_native("iOS Device Manager", native_options, Box::new(|_cc| Box::new(app)))
+    let app = PairApp::new(tx_cmd, rx_evt, default_dir);
+    eframe::run_native(
+        "iOS Pair Utility",
+        NativeOptions::default(),
+        Box::new(|_| Ok(Box::new(app))),
+    )?;
+    Ok(())
+}
+
+/// Load or create preferences directory
+fn canonical_or_create(dirname: &str) -> PathBuf {
+    let base = BaseDirs::new().unwrap_or_else(|| panic!("Could not determine home directory"));
+    let mut dir = base.home_dir().to_path_buf();
+    dir.push(dirname);
+    if !dir.exists() {
+        fs::create_dir_all(&dir).unwrap();
+    }
+    dir
 }
