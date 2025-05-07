@@ -2,16 +2,16 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
 
 env:
   BINARY_NAME: pair
 
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
-  # Linux x86_64 (native)
+  # Linux x86_64 (native + AppImage)
   build-linux-x64:
-    name: Build Linux x86_64
+    name: Build & Bundle Linux x86_64
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -23,19 +23,35 @@ jobs:
           components: rustfmt, clippy
           target: x86_64-unknown-linux-gnu
 
-      - name: Build
+      - name: Build native binary
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-unknown-linux-gnu
 
-      - name: Upload artifact
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle
+
+      - name: Create AppImage
+        run: |
+          # Ensure binary is in target/release
+          cp target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} target/release/
+          # Bundle as AppImage
+          cargo bundle --release --bin ${{ env.BINARY_NAME }} --format appimage --target x86_64-unknown-linux-gnu
+
+      - name: Upload native binary
         uses: actions/upload-artifact@v4
         with:
-          name: linux-x64
+          name: linux-x64-binary
           path: target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64-appimage
+          path: target/release/bundle/appimage/${{ env.BINARY_NAME }}*.AppImage
+
   # ───────────────────────────────────────────────────────────────────────────
-  # Linux ARM64 (native)
+  # Linux ARM64 (native + AppImage)
   build-linux-arm64:
-    name: Build Linux ARM64
+    name: Build & Bundle Linux ARM64
     runs-on: ubuntu-22.04-arm
     steps:
       - uses: actions/checkout@v3
@@ -47,23 +63,34 @@ jobs:
           components: rustfmt, clippy
           target: aarch64-unknown-linux-gnu
 
-      - name: Build
+      - name: Build native binary
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-unknown-linux-gnu
 
-      - name: Upload artifact
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle
+
+      - name: Create AppImage
+        run: |
+          cp target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} target/release/
+          cargo bundle --release --bin ${{ env.BINARY_NAME }} --format appimage --target aarch64-unknown-linux-gnu
+
+      - name: Upload native binary
         uses: actions/upload-artifact@v4
         with:
-          name: linux-arm64
+          name: linux-arm64-binary
           path: target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64-appimage
+          path: target/release/bundle/appimage/${{ env.BINARY_NAME }}*.AppImage
+
   # ───────────────────────────────────────────────────────────────────────────
-  # macOS slices (Intel + ARM)
+  # macOS slices (Intel + ARM) + .app bundle
   build-macos-slices:
     name: Build macOS slices
     runs-on: macos-latest
-    outputs:
-      intel-path: target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
-      arm-path:   target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
     steps:
       - uses: actions/checkout@v3
 
@@ -93,101 +120,84 @@ jobs:
       - name: Upload Intel slice
         uses: actions/upload-artifact@v4
         with:
-          name: macos-x64
-          path: ${{ steps.build.outputs.intel-path }}
+          name: macos-x64-binary
+          path: target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
 
       - name: Upload ARM64 slice
         uses: actions/upload-artifact@v4
         with:
-          name: macos-arm64
-          path: ${{ steps.build.outputs.arm-path }}
+          name: macos-arm64-binary
+          path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
 
   # ───────────────────────────────────────────────────────────────────────────
-  # macOS .app bundle (using cargo-bundle) → zip
-  package-macos-app:
-    name: Package macOS .app
+  # macOS universal + .app bundle
+  package-macos:
+    name: Package macOS Universal & .app
     needs: build-macos-slices
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
 
+      - name: Download slices
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-x64-binary
+          path: slice-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-arm64-binary
+          path: slice-arm64
+
+      - name: Create universal binary
+        run: |
+          mkdir -p target/universal/release
+          lipo \
+            slice-x64/${{ env.BINARY_NAME }} \
+            slice-arm64/${{ env.BINARY_NAME }} \
+            -create -output target/universal/release/${{ env.BINARY_NAME }}
+
       - name: Install cargo-bundle
-        run: |
-          cargo install cargo-bundle
+        run: cargo install cargo-bundle
 
-      - name: Build & bundle .app
+      - name: Create .app bundle
         run: |
-          # Ensure both archs are present in target/
+          # Move universal binary into standard release dir
+          cp target/universal/release/${{ env.BINARY_NAME }} target/release/
+          # Bundle as macOS .app
           cargo bundle --release --bin ${{ env.BINARY_NAME }} --format osx
-          # This produces: target/release/bundle/osx/${BINARY_NAME}.app
 
-      - name: Zip .app
-        run: |
-          cd target/release/bundle/osx
-          zip -r "${{ env.BINARY_NAME }}.app.zip" "${{ env.BINARY_NAME }}.app"
+      - name: Upload universal binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal-binary
+          path: target/universal/release/${{ env.BINARY_NAME }}
 
-      - name: Upload macOS .app zip
+      - name: Upload .app bundle
         uses: actions/upload-artifact@v4
         with:
           name: macos-app
-          path: target/release/bundle/osx/${{ env.BINARY_NAME }}.app.zip
+          path: target/release/bundle/osx/${{ env.BINARY_NAME }}.app
 
   # ───────────────────────────────────────────────────────────────────────────
-  # Linux AppDir-style tarball + .desktop launcher
-  package-linux:
-    name: Package Linux AppDir
-    needs: [build-linux-x64, build-linux-arm64]
-    runs-on: ubuntu-latest
+  # Windows MSVC (native only)
+  build-windows:
+    name: Build Windows (MSVC)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
 
-      - name: Download Linux x86_64 binary
-        uses: actions/download-artifact@v4
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
         with:
-          name: linux-x64
-          path: linux-x64
+          toolchain: stable
+          components: rustfmt, clippy
+          target: x86_64-pc-windows-msvc
 
-      - name: Download Linux ARM64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-arm64
-          path: linux-arm64
-
-      - name: Create AppDir layout
-        run: |
-          mkdir -p dist/AppDir/usr/bin
-          cp linux-x64/${{ env.BINARY_NAME }} dist/AppDir/usr/bin/${{ env.BINARY_NAME }}-x86_64
-          cp linux-arm64/${{ env.BINARY_NAME }} dist/AppDir/usr/bin/${{ env.BINARY_NAME }}-aarch64
-
-          # A simple launcher script that picks the right arch
-          cat > dist/AppDir/AppRun <<'EOF'
-          #!/usr/bin/env sh
-          ARCH=$(uname -m)
-          if [ "$ARCH" = "x86_64" ]; then
-            exec usr/bin/${{ env.BINARY_NAME }}-x86_64 "$@"
-          else
-            exec usr/bin/${{ env.BINARY_NAME }}-aarch64 "$@"
-          fi
-          EOF
-          chmod +x dist/AppDir/AppRun
-
-          # .desktop file with Terminal=false so no console
-          mkdir -p dist/AppDir/usr/share/applications
-          cat > dist/AppDir/usr/share/applications/${{ env.BINARY_NAME }}.desktop <<EOF
-          [Desktop Entry]
-          Type=Application
-          Name=iOS Pair Utility
-          Exec=${{ env.BINARY_NAME }}
-          Icon=iOSPairGUI
-          Terminal=false
-          Categories=Utility;
-          EOF
-
-          # Package it up
-          tar -C dist/AppDir -czf dist/${{ env.BINARY_NAME }}-linux.tar.gz .
-
-      - name: Upload Linux package
+      - name: Build
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
+      
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-appdir
-          path: dist/${{ env.BINARY_NAME }}-linux.tar.gz
+          name: windows-msvc
+          path: target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe
