@@ -13,6 +13,7 @@ use log::info;
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
@@ -60,12 +61,14 @@ fn save_prefs(p: &Prefs) {
 enum Command {
     Refresh,
     Pair { udid: String, out_dir: PathBuf },
+    GetDeviceInfo { udid: String },
 }
 
 #[derive(Debug)]
 enum GuiEvent {
     Devices(Vec<String>),
     Status(String),
+    DeviceInfo { udid: String, info: HashMap<String, String> },
 }
 
 /*  GUI app */
@@ -79,6 +82,8 @@ struct PairApp {
     output_dir: PathBuf,
     last_tick: Instant,
     first_frame: bool,
+    device_info: HashMap<String, HashMap<String, String>>,
+    show_device_info: bool,
 }
 
 impl PairApp {
@@ -93,6 +98,8 @@ impl PairApp {
             output_dir: prefs.output_dir.unwrap_or(default_dir),
             last_tick: Instant::now() - Duration::from_secs(10),
             first_frame: true,
+            device_info: HashMap::new(),
+            show_device_info: false,
         }
     }
 }
@@ -117,6 +124,10 @@ impl App for PairApp {
                     self.status = format!("{} device(s) connected", self.devices.len());
                 }
                 GuiEvent::Status(s) => self.status = s,
+                GuiEvent::DeviceInfo { udid, info } => {
+                    self.device_info.insert(udid, info);
+                    self.status = "Device info retrieved".to_string();
+                }
             }
         }
 
@@ -154,6 +165,19 @@ impl App for PairApp {
                         self.status = format!("Pairing {}", udid);
                     }
                 }
+
+                if ui
+                    .add_enabled(self.selected.is_some(), egui::Button::new(" Device Info"))
+                    .clicked()
+                {
+                    if let Some(udid) = &self.selected {
+                        let _ = self.tx.send(Command::GetDeviceInfo {
+                            udid: udid.clone(),
+                        });
+                        self.status = format!("Getting info for {}", udid);
+                        self.show_device_info = true;
+                    }
+                }
             });
 
             ui.horizontal(|ui| {
@@ -166,6 +190,43 @@ impl App for PairApp {
             for dev in &self.devices {
                 ui.selectable_value(&mut self.selected, Some(dev.clone()), dev);
             }
+            ui.separator();
+            
+            // Display device info if available and selected
+            if self.show_device_info && self.selected.is_some() {
+                if let Some(udid) = &self.selected {
+                    if let Some(info) = self.device_info.get(udid) {
+                        ui.collapsing("Device Information", |ui| {
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                // Display key device information first
+                                for key in &["ProductName", "ProductType", "ProductVersion", "BuildVersion", "SerialNumber", "DeviceName", "UniqueDeviceID"] {
+                                    if let Some(value) = info.get(*key) {
+                                        ui.horizontal(|ui| {
+                                            ui.label(format!("{}: ", key));
+                                            ui.monospace(value);
+                                        });
+                                    }
+                                }
+                                
+                                ui.separator();
+                                
+                                // Display all other information
+                                for (key, value) in info {
+                                    if !["ProductName", "ProductType", "ProductVersion", "BuildVersion", "SerialNumber", "DeviceName", "UniqueDeviceID"].contains(&key.as_str()) {
+                                        ui.horizontal(|ui| {
+                                            ui.label(format!("{}: ", key));
+                                            ui.monospace(value);
+                                        });
+                                    }
+                                }
+                            });
+                        });
+                    } else {
+                        ui.label("No device information available. Click 'Device Info' to retrieve.");
+                    }
+                }
+            }
+            
             ui.separator();
             ui.label(&self.status);
         });
@@ -197,7 +258,19 @@ async fn worker_loop(rx: Receiver<Command>, tx: Sender<GuiEvent>) {
                         let _ = tx.send(GuiEvent::Status(format!(" {udid}: {e:?}")));
                     }
                 }
-            }
+            },
+
+            Ok(Command::GetDeviceInfo { udid }) => {
+                let _ = tx.send(GuiEvent::Status(format!("Getting info for {udid}")));
+                match get_device_info(&udid).await {
+                    Ok(info) => {
+                        let _ = tx.send(GuiEvent::DeviceInfo { udid, info });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(GuiEvent::Status(format!("Error getting device info: {e:?}")));
+                    }
+                }
+            },
 
             Err(_) => break, // channel closed
         }
@@ -236,6 +309,58 @@ async fn pair_one(
     File::create(&out_path)?.write_all(&data)?;
     info!("Wrote {}", out_path.display());
     Ok(out_path)
+}
+
+// Get device information
+async fn get_device_info(udid: &str) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
+    let mut mux = UsbmuxdConnection::default().await?;
+    let dev = mux.get_device(udid).await?;
+    let provider = dev.to_provider(UsbmuxdAddr::default(), "pair-gui");
+    let mut lockdown = LockdownClient::connect(&provider).await?;
+    
+    // Try to start a session if there's already a pairing
+    if let Ok(pf) = provider.get_pairing_file().await {
+        let _ = lockdown.start_session(&pf).await; // Ignore errors
+    }
+    
+    // Get all values from the device
+    let values = lockdown.get_all_values().await?;
+    
+    // Convert the values to a HashMap<String, String> for display
+    let mut info = HashMap::new();
+    
+    fn extract_values(prefix: &str, value: &plist::Value, info: &mut HashMap<String, String>) {
+        match value {
+            plist::Value::Dictionary(dict) => {
+                for (k, v) in dict {
+                    let new_prefix = if prefix.is_empty() { k.clone() } else { format!("{}.{}", prefix, k) };
+                    extract_values(&new_prefix, v, info);
+                }
+            },
+            plist::Value::Array(arr) => {
+                for (i, v) in arr.iter().enumerate() {
+                    let new_prefix = format!("{}[{}]", prefix, i);
+                    extract_values(&new_prefix, v, info);
+                }
+            },
+            _ => {
+                info.insert(prefix.to_string(), format!("{:?}", value));
+            }
+        }
+    }
+    
+    extract_values("", &values, &mut info);
+    
+    // Additional specific values to extract directly
+    if let Ok(value) = lockdown.get_value("ProductVersion", None).await {
+        info.insert("ProductVersion".to_string(), format!("{:?}", value));
+    }
+    
+    if let Ok(device_type) = lockdown.idevice.get_type().await {
+        info.insert("DeviceType".to_string(), device_type);
+    }
+    
+    Ok(info)
 }
 
 /* util */
@@ -300,4 +425,3 @@ fn main() -> eframe::Result<()> {
 
     Ok(())
 }
-
