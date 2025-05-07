@@ -3,88 +3,71 @@ name: CI
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
-    inputs:
-      make_release:
-        description: 'Create GitHub Release after build?'
-        required: false
-        default: 'false'
-      release_tag:
-        description: 'Tag name for the release (e.g. v1.2.3)'
-        required: false
-        default: ''
-      release_name:
-        description: 'Human-friendly release name'
-        required: false
-        default: ''
 
 env:
   BINARY_NAME: pair
 
 jobs:
-  # ───────────────────────────────────────────────────────────
-  # 1) Linux x86_64 (native)
+  # ───────────────────────────────────────────────────────────────────────────
+  # Linux x86_64 (native)
   build-linux-x64:
     name: Build Linux x86_64
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Set up Rust (x86_64)
+      - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
           target: x86_64-unknown-linux-gnu
 
-      - name: Build pair for Linux x86_64
+      - name: Build
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-unknown-linux-gnu
 
-      - name: Upload linux-x64 artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-x64
           path: target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
-  # ───────────────────────────────────────────────────────────
-  # 2) Linux ARM64 (native)
+  # ───────────────────────────────────────────────────────────────────────────
+  # Linux ARM64 (native)
   build-linux-arm64:
     name: Build Linux ARM64
     runs-on: ubuntu-22.04-arm
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Set up Rust (ARM64)
+      - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
           target: aarch64-unknown-linux-gnu
 
-      - name: Build pair for Linux ARM64
+      - name: Build
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-unknown-linux-gnu
 
-      - name: Upload linux-arm64 artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-arm64
           path: target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
-  # ───────────────────────────────────────────────────────────
-  # 3) macOS slices (Intel + ARM)
+  # ───────────────────────────────────────────────────────────────────────────
+  # macOS slices (Intel + ARM)
   build-macos-slices:
-    name: Build macOS Slices
+    name: Build macOS slices
     runs-on: macos-latest
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
       - name: Uninstall Homebrew rustup
         run: brew uninstall rustup rustup-init || true
 
-      - name: Set up Rust (macOS Intel)
+      - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -94,7 +77,7 @@ jobs:
       - name: Build Intel slice
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-apple-darwin
 
-      - name: Set up Rust (macOS ARM64)
+      - name: Set up Rust for ARM64
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -116,13 +99,15 @@ jobs:
           name: macos-arm64
           path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
 
-  # ───────────────────────────────────────────────────────────
-  # 4) macOS universal (depends on slices)
+  # ───────────────────────────────────────────────────────────────────────────
+  # macOS universal (depends on slices)
   package-macos:
     name: Package macOS Universal
     needs: build-macos-slices
     runs-on: macos-latest
     steps:
+      - uses: actions/checkout@v3
+
       - name: Download Intel slice
         uses: actions/download-artifact@v4
         with:
@@ -142,102 +127,26 @@ jobs:
             slice-x64/${{ env.BINARY_NAME }} \
             slice-arm64/${{ env.BINARY_NAME }} \
             -create -output target/universal/release/${{ env.BINARY_NAME }}
-
       - name: Upload universal artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-universal
           path: target/universal/release/${{ env.BINARY_NAME }}
 
-  # ───────────────────────────────────────────────────────────
-  # 5) Windows MSVC (native)
+  # ───────────────────────────────────────────────────────────────────────────
+  # Windows MSVC (native)
   build-windows:
     name: Build Windows (MSVC)
     runs-on: windows-latest
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Set up Rust (Windows MSVC)
+      - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
           target: x86_64-pc-windows-msvc
 
-      - name: Build pair for Windows
+      - name: Build
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
-
-      - name: Upload windows-msvc artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-msvc
-          path: target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe
-
-  # ───────────────────────────────────────────────────────────
-  # 6) Optional Release Job
-  release:
-    name: Create GitHub Release
-    needs: [ build-linux-x64, build-linux-arm64, package-macos, build-windows ]
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.make_release == 'true' }}
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v3
-
-      - name: Determine tag and name
-        id: vars
-        run: |
-          TAG="${{ github.event.inputs.release_tag }}"
-          if [ -z "$TAG" ]; then
-            TAG="release-$(git rev-parse --short HEAD)"
-          fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          NAME="${{ github.event.inputs.release_name }}"
-          if [ -z "$NAME" ]; then
-            NAME="$TAG"
-          fi
-          echo "name=$NAME" >> $GITHUB_OUTPUT
-
-      - name: Create GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
-        with:
-          tag_name: ${{ steps.vars.outputs.tag }}
-          release_name: ${{ steps.vars.outputs.name }}
-          body: "Automated release for ${{ steps.vars.outputs.tag }}"
-          draft: false
-          prerelease: false
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload linux-x64 binary
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
-          asset_name: linux-x64-${{ env.BINARY_NAME }}
-          asset_content_type: application/octet-stream
-
-      - name: Upload linux-arm64 binary
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
-          asset_name: linux-arm64-${{ env.BINARY_NAME }}
-          asset_content_type: application/octet-stream
-
-      - name: Upload macOS universal binary
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: target/universal/release/${{ env.BINARY_NAME }}
-          asset_name: macos-universal-${{ env.BINARY_NAME }}
-          asset_content_type: application/octet-stream
-
-      - name: Upload windows-msvc binary
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe
-          asset_name: windows-msvc-${{ env.BINARY_NAME }}.exe
-          asset_content_type: application/octet-stream
