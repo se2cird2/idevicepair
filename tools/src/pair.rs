@@ -1,6 +1,8 @@
 //! pair_gui  GUI front-end for the iOS pairing utility
 //! Jackson Coxson  2025
 
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use eframe::{egui, App, NativeOptions};
 use egui::ScrollArea;
@@ -124,7 +126,6 @@ impl App for PairApp {
                         self.selected = Some(self.devices[0].0.clone());
                     }
                     self.status = format!("{} device(s) connected", self.devices.len());
-                    // Device info fetching is now handled in worker_loop
                 }
                 GuiEvent::Status(s) => self.status = s,
                 GuiEvent::DeviceInfo { udid, info } => {
