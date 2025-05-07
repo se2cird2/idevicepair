@@ -32,7 +32,7 @@ jobs:
             target: aarch64-apple-darwin
             artifact: macos-arm64
 
-          # Windows native MSVC
+          # Windows MSVC native
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: windows-msvc
@@ -45,50 +45,61 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-          components: rustfmt, clippy
+          components: rustfmt, clippy :contentReference[oaicite:3]{index=3}
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # Install macOS-specific dependencies for libimobiledevice & friends
+      - name: Install iOS device libraries
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew update
+          brew install libimobiledevice     # communicates with iOS devices :contentReference[oaicite:4]{index=4}
+          brew install libplist             # Apple property-list library :contentReference[oaicite:5]{index=5}
+          brew install libusbmuxd           # USB multiplexing daemon :contentReference[oaicite:6]{index=6}
 
       - name: Build ${{ matrix.artifact }}
         run: |
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            cargo build --release --bin ${{ env.BINARY_NAME }} --target ${{ matrix.target }}
-          else
-            cargo build --release --bin ${{ env.BINARY_NAME }} --target ${{ matrix.target }}
-          fi
+          cargo build \
+            --release \
+            --bin ${{ env.BINARY_NAME }} \
+            --target ${{ matrix.target }}
 
       - name: Upload ${{ matrix.artifact }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          path: |
+            target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}${{ matrix.os == 'windows-latest' && '.exe' || '' }} :contentReference[oaicite:7]{index=7}
 
   universal-macos:
     name: Create macOS universal binary
-    runs-on: macos-latest
     needs: build
+    runs-on: macos-latest
     if: always()
     steps:
       - name: Download x86_64 slice
         uses: actions/download-artifact@v4
         with:
           name: macos-x64
-          path: slice-x64
+          path: slice-x64 :contentReference[oaicite:8]{index=8}
 
       - name: Download ARM64 slice
         uses: actions/download-artifact@v4
         with:
           name: macos-arm64
-          path: slice-arm64
+          path: slice-arm64 :contentReference[oaicite:9]{index=9}
 
       - name: Create universal binary
         run: |
           mkdir -p target/universal/release
           lipo \
-            slice-x64/pair \
-            slice-arm64/pair \
-            -create -output target/universal/release/pair
+            slice-x64/${{ env.BINARY_NAME }} \
+            slice-arm64/${{ env.BINARY_NAME }} \
+            -create -output target/universal/release/${{ env.BINARY_NAME }}
 
       - name: Upload macOS universal
         uses: actions/upload-artifact@v4
         with:
           name: macos-universal
           path: target/universal/release/${{ env.BINARY_NAME }}
+
