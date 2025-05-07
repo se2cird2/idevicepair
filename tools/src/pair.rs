@@ -10,6 +10,7 @@ use idevice::{
     IdeviceService,
 };
 use log::info;
+use plist;
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -197,6 +198,35 @@ impl App for PairApp {
                 if let Some(udid) = &self.selected {
                     if let Some(info) = self.device_info.get(udid) {
                         ui.collapsing("Device Information", |ui| {
+                            // Add export button
+                            if ui.button("Export Info").clicked() {
+                                if let Some(path) = FileDialog::new()
+                                    .set_directory(&self.output_dir)
+                                    .set_file_name(format!("{}-info.txt", udid))
+                                    .save_file() {
+                                    let mut content = String::new();
+                                    // Key info first
+                                    for key in &["ProductName", "ProductType", "ProductVersion", "BuildVersion", "SerialNumber", "DeviceName", "UniqueDeviceID"] {
+                                        if let Some(value) = info.get(*key) {
+                                            content.push_str(&format!("{}: {}\n", key, value));
+                                        }
+                                    }
+                                    content.push_str("\n--- All Properties ---\n\n");
+                                    
+                                    // All keys alphabetically
+                                    let mut keys: Vec<&String> = info.keys().collect();
+                                    keys.sort();
+                                    
+                                    for key in keys {
+                                        if let Some(value) = info.get(key) {
+                                            content.push_str(&format!("{}: {}\n", key, value));
+                                        }
+                                    }
+                                    
+                                    let _ = fs::write(path, content);
+                                }
+                            }
+                            
                             egui::ScrollArea::vertical().show(ui, |ui| {
                                 // Display key device information first
                                 for key in &["ProductName", "ProductType", "ProductVersion", "BuildVersion", "SerialNumber", "DeviceName", "UniqueDeviceID"] {
@@ -210,15 +240,22 @@ impl App for PairApp {
                                 
                                 ui.separator();
                                 
-                                // Display all other information
-                                for (key, value) in info {
-                                    if !["ProductName", "ProductType", "ProductVersion", "BuildVersion", "SerialNumber", "DeviceName", "UniqueDeviceID"].contains(&key.as_str()) {
-                                        ui.horizontal(|ui| {
-                                            ui.label(format!("{}: ", key));
-                                            ui.monospace(value);
-                                        });
+                                ui.collapsing("All Properties", |ui| {
+                                    // Get and sort keys for alphabetical display
+                                    let mut keys: Vec<&String> = info.keys().collect();
+                                    keys.sort();
+                                    
+                                    for key in keys {
+                                        if !["ProductName", "ProductType", "ProductVersion", "BuildVersion", "SerialNumber", "DeviceName", "UniqueDeviceID"].contains(&key.as_str()) {
+                                            if let Some(value) = info.get(key) {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(format!("{}: ", key));
+                                                    ui.monospace(value);
+                                                });
+                                            }
+                                        }
                                     }
-                                }
+                                });
                             });
                         });
                     } else {
@@ -329,22 +366,67 @@ async fn get_device_info(udid: &str) -> Result<HashMap<String, String>, Box<dyn 
     // Convert the values to a HashMap<String, String> for display
     let mut info = HashMap::new();
     
+    // Helper function to recursively extract values from plist structures
+    fn process_value(value: &plist::Value) -> String {
+        match value {
+            plist::Value::String(s) => s.clone(),
+            plist::Value::Boolean(b) => b.to_string(),
+            plist::Value::Integer(i) => i.to_string(),
+            plist::Value::Real(r) => r.to_string(),
+            plist::Value::Date(d) => format!("{:?}", d),
+            plist::Value::Data(d) => format!("<{} bytes>", d.len()),
+            plist::Value::Array(a) => {
+                if a.len() <= 3 {
+                    format!("[{}]", a.iter()
+                        .map(|v| process_value(v))
+                        .collect::<Vec<_>>()
+                        .join(", "))
+                } else {
+                    format!("[{} items]", a.len())
+                }
+            },
+            plist::Value::Dictionary(d) => {
+                format!("<{} keys>", d.len())
+            },
+            _ => format!("{:?}", value),
+        }
+    }
+    
     fn extract_values(prefix: &str, value: &plist::Value, info: &mut HashMap<String, String>) {
         match value {
             plist::Value::Dictionary(dict) => {
                 for (k, v) in dict {
                     let new_prefix = if prefix.is_empty() { k.clone() } else { format!("{}.{}", prefix, k) };
-                    extract_values(&new_prefix, v, info);
+                    match v {
+                        plist::Value::Dictionary(_) | plist::Value::Array(_) => {
+                            extract_values(&new_prefix, v, info);
+                            info.insert(new_prefix.clone(), process_value(v));
+                        },
+                        _ => {
+                            info.insert(new_prefix, process_value(v));
+                        }
+                    }
                 }
             },
             plist::Value::Array(arr) => {
-                for (i, v) in arr.iter().enumerate() {
-                    let new_prefix = format!("{}[{}]", prefix, i);
-                    extract_values(&new_prefix, v, info);
+                if arr.len() <= 10 { // Only process small arrays to avoid excessive entries
+                    for (i, v) in arr.iter().enumerate() {
+                        let new_prefix = format!("{}[{}]", prefix, i);
+                        match v {
+                            plist::Value::Dictionary(_) | plist::Value::Array(_) => {
+                                extract_values(&new_prefix, v, info);
+                            },
+                            _ => {
+                                info.insert(new_prefix, process_value(v));
+                            }
+                        }
+                    }
+                } else {
+                    info.insert(prefix.to_string(), format!("[{} items]", arr.len()));
                 }
             },
             _ => {
-                info.insert(prefix.to_string(), format!("{:?}", value));
+                info.insert(prefix.to_string(), process_value(value));
             }
         }
     }
