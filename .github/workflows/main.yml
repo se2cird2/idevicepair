@@ -150,3 +150,9 @@ jobs:
 
       - name: Build
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msvc
+          path: target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe
