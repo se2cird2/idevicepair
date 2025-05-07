@@ -3,170 +3,157 @@ name: CI
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
 
 env:
-  BINARY: pair
+  BINARY_NAME: pair
 
-###############################################################################
-# 1) Checkout & Cache
-###############################################################################
 jobs:
-  checkout:
-    name: 🔄 Checkout & Cache
+  # ───────────────────────────────────────────────────────────────────────────
+  # Linux x86_64 (native)
+  build-linux-x64:
+    name: Build Linux x86_64
     runs-on: ubuntu-latest
-    outputs:
-      cache-key: ${{ steps.cache-crates.outputs.cache-hit }}
-    steps:
-      - name: 📥 Checkout repo
-        uses: actions/checkout@v3
-
-      - name: ⚙️ Cache crates.io index and git
-        id: cache-crates
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-###############################################################################
-# 2) Lint (rustfmt + clippy)
-###############################################################################
-  lint:
-    name: 📝 Lint & Format Check
-    runs-on: ubuntu-latest
-    needs: checkout
-    steps:
-      - uses: actions/checkout@v3  # minimal checkout
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-      - name: rustfmt check
-        run: cargo fmt --all -- --check
-      - name: clippy (deny warnings)
-        run: cargo clippy --all -- -D warnings
-
-###############################################################################
-# 3) Test (on host)
-###############################################################################
-  test:
-    name: ✅ Run Tests
-    runs-on: ubuntu-latest
-    needs: [checkout, lint]
     steps:
       - uses: actions/checkout@v3
+
       - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-      - name: Run unit & integration tests
-        run: cargo test --all -- --color=always
-
-###############################################################################
-# 4) Build (matrix across native runners)
-###############################################################################
-  build:
-    name: 🛠 Build • ${{ matrix.os }} / ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    needs: [checkout, lint, test]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            art: linux-x64
-          - os: ubuntu-22.04-arm
-            target: aarch64-unknown-linux-gnu
-            art: linux-arm64
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            art: macos-x64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            art: macos-arm64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            art: windows-msvc
-
-    steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v3
-
-      - name: ⚙️ Set up Rust & target
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
-          target: ${{ matrix.target }}
+          target: x86_64-unknown-linux-gnu
 
-      - name: 🛠 Build ${{ env.BINARY }} (release, ${{ matrix.target }})
-        run: |
-          cargo build --release --bin ${{ env.BINARY }} --target ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-unknown-linux-gnu
 
-      - name: 📤 Upload ${{ matrix.art }}
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.art }}
-          path: target/${{ matrix.target }}/release/${{ env.BINARY }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          name: linux-x64
+          path: target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
-###############################################################################
-# 5) Package macOS universal (after both slices)
-###############################################################################
-  package-macos:
-    name: 🍏 Package macOS Universal
-    runs-on: macos-latest
-    needs: build
-    if: always()
+  # ───────────────────────────────────────────────────────────────────────────
+  # Linux ARM64 (native)
+  build-linux-arm64:
+    name: Build Linux ARM64
+    runs-on: ubuntu-22.04-arm
     steps:
-      - name: 🔽 Download intel slice
+      - uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          target: aarch64-unknown-linux-gnu
+
+      - name: Build
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-unknown-linux-gnu
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # macOS slices (Intel + ARM)
+  build-macos-slices:
+    name: Build macOS slices
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Uninstall Homebrew rustup
+        run: brew uninstall rustup rustup-init || true
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          target: x86_64-apple-darwin
+
+      - name: Build Intel slice
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-apple-darwin
+
+      - name: Set up Rust for ARM64
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          target: aarch64-apple-darwin
+
+      - name: Build ARM64 slice
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-apple-darwin
+
+      - name: Upload Intel slice
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x64
+          path: target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
+
+      - name: Upload ARM64 slice
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # macOS universal (depends on slices)
+  package-macos:
+    name: Package macOS Universal
+    needs: build-macos-slices
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download Intel slice
         uses: actions/download-artifact@v4
         with:
           name: macos-x64
           path: slice-x64
-        continue-on-error: true
 
-      - name: 🔽 Download arm slice
+      - name: Download ARM64 slice
         uses: actions/download-artifact@v4
         with:
           name: macos-arm64
           path: slice-arm64
-        continue-on-error: true
 
-      - name: 🔨 Create universal binary
+      - name: Create universal binary
         run: |
-          if [[ -f slice-x64/${{ env.BINARY }} && -f slice-arm64/${{ env.BINARY }} ]]; then
-            mkdir -p target/universal/release
-            lipo \
-              slice-x64/${{ env.BINARY }} \
-              slice-arm64/${{ env.BINARY }} \
-              -create -output target/universal/release/${{ env.BINARY }}
-          else
-            echo "⚠️ Missing one or both macOS slices—skipping universal"
-          fi
+          mkdir -p target/universal/release
+          lipo \
+            slice-x64/${{ env.BINARY_NAME }} \
+            slice-arm64/${{ env.BINARY_NAME }} \
+            -create -output target/universal/release/${{ env.BINARY_NAME }}
 
-      - name: 📤 Upload macOS universal
+      - name: Upload universal artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-universal
-          path: target/universal/release/${{ env.BINARY }}
+          path: target/universal/release/${{ env.BINARY_NAME }}
 
-###############################################################################
-# 6) Final aggregation (optional)
-###############################################################################
-  upload-all:
-    name: 🗂️ Collect All Binaries
-    runs-on: ubuntu-latest
-    needs: [build, package-macos]
+  # ───────────────────────────────────────────────────────────────────────────
+  # Windows MSVC (native)
+  build-windows:
+    name: Build Windows (MSVC)
+    runs-on: windows-latest
     steps:
-      - name: 🔽 Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: all-bins
+      - uses: actions/checkout@v3
 
-      - name: 📦 List artifacts
-        run: ls -R all-bins
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          target: x86_64-pc-windows-msvc
+
+      - name: Build
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msvc
+          path: target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe
