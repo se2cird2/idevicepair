@@ -103,3 +103,22 @@ opt-level = 3
 
 [profile.dev]
 opt-level = 3
+
+[package.metadata.bundle]
+# The name of the generated macOS application
+name              = "idevice-tools"
+# Reverse‑DNS identifier for your app bundle
+identifier        = "com.yourdomain.idevice-tools"
+# Path(s) to your .icns icon file(s)
+icon              = ["assets/icon.icns"]
+# Extra files/resources to copy into the .app bundle
+resources         = ["resources/**"]
+# Version string (can mirror package.version)
+version           = "0.1.0"
+# One‑line summary for macOS’s Info.plist
+short_description = "Rust tools for interacting with iOS devices"
+# Longer description for your users
+long_description  = """
+  A suite of Rust-based command‑line and GUI utilities to work
+  with lockdownd, pairing, and other iOS services.
+"""
