@@ -24,9 +24,7 @@ jobs:
           target: x86_64-unknown-linux-gnu
 
       - name: Build Release Binary
-        run: |
-          cargo build --release --bin ${{ env.BINARY_NAME }} \
-            --target x86_64-unknown-linux-gnu
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-unknown-linux-gnu
 
       - name: Install linuxdeploy (AppImage)
         id: linuxdeploy
@@ -37,8 +35,7 @@ jobs:
       - name: Create AppDir for x86_64
         run: |
           mkdir -p appdir/usr/bin appdir/usr/share/applications
-          cp target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} \
-             appdir/usr/bin/
+          cp target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} appdir/usr/bin/
           cat > appdir/usr/share/applications/${{ env.BINARY_NAME }}.desktop <<EOF
           [Desktop Entry]
           Name=${{ env.BINARY_NAME }}
@@ -76,9 +73,7 @@ jobs:
           target: aarch64-unknown-linux-gnu
 
       - name: Build Release Binary
-        run: |
-          cargo build --release --bin ${{ env.BINARY_NAME }} \
-            --target aarch64-unknown-linux-gnu
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-unknown-linux-gnu
 
       - name: Install linuxdeploy (AppImage)
         id: linuxdeploy
@@ -89,8 +84,7 @@ jobs:
       - name: Create AppDir for ARM64
         run: |
           mkdir -p appdir/usr/bin appdir/usr/share/applications
-          cp target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} \
-             appdir/usr/bin/
+          cp target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} appdir/usr/bin/
           cat > appdir/usr/share/applications/${{ env.BINARY_NAME }}.desktop <<EOF
           [Desktop Entry]
           Name=${{ env.BINARY_NAME }}
@@ -123,6 +117,10 @@ jobs:
       - name: Uninstall Homebrew rustup (if any)
         run: brew uninstall rustup rustup-init || true
 
+      # ← NEW: install both darwin targets so rustc can find `core`
+      - name: Add macOS build targets
+        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
+
       - name: Set up Rust for both architectures
         uses: actions-rs/toolchain@v1
         with:
@@ -130,14 +128,10 @@ jobs:
           components: rustfmt, clippy
 
       - name: Build Intel slice
-        run: |
-          cargo build --release --bin ${{ env.BINARY_NAME }} \
-            --target x86_64-apple-darwin
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-apple-darwin
 
       - name: Build ARM64 slice
-        run: |
-          cargo build --release --bin ${{ env.BINARY_NAME }} \
-            --target aarch64-apple-darwin
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-apple-darwin
 
       - name: Create universal binary
         run: |
@@ -151,24 +145,21 @@ jobs:
         run: |
           APP=target/universal/release/${{ env.BINARY_NAME }}.app
           mkdir -p $APP/Contents/{MacOS,Resources}
-          cp target/universal/release/${{ env.BINARY_NAME }} \
-             $APP/Contents/MacOS/
+          cp target/universal/release/${{ env.BINARY_NAME }} $APP/Contents/MacOS/
+
           cat > $APP/Contents/Info.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
                    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-            <dict>
-              <key>CFBundleName</key><string>${{ env.BINARY_NAME }}</string>
-              <key>CFBundleExecutable</key><string>${{ env.BINARY_NAME }}</string>
-              <key>CFBundleIdentifier</key><string>com.example.${{ env.BINARY_NAME }}</string>
-              <key>CFBundleVersion</key><string>1.0</string>
-              <key>CFBundleIconFile</key><string>icon.icns</string>
-            </dict>
-          </plist>
+          <plist version="1.0"><dict>
+            <key>CFBundleName</key><string>${{ env.BINARY_NAME }}</string>
+            <key>CFBundleExecutable</key><string>${{ env.BINARY_NAME }}</string>
+            <key>CFBundleIdentifier</key><string>com.example.${{ env.BINARY_NAME }}</string>
+            <key>CFBundleVersion</key><string>1.0</string>
+            <key>CFBundleIconFile</key><string>icon.icns</string>
+          </dict></plist>
           EOF
-          # (Optional) copy your icon file:
-          # cp assets/icon.icns $APP/Contents/Resources/
+          # (Optional) cp assets/icon.icns $APP/Contents/Resources/
 
       - name: Zip .app for distribution
         run: |
@@ -199,9 +190,7 @@ jobs:
           target: x86_64-pc-windows-msvc
 
       - name: Build Release Binary
-        run: |
-          cargo build --release --bin ${{ env.BINARY_NAME }} \
-            --target x86_64-pc-windows-msvc
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
 
       - name: Upload Windows executable
         uses: actions/upload-artifact@v4
