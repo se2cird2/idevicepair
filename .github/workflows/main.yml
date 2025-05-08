@@ -9,9 +9,9 @@ env:
 
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
-  # Linux x86_64 (AppImage)
+  # Linux x86_64 (native)
   build-linux-x64:
-    name: Build Linux x86_64 & AppImage
+    name: Build Linux x86_64
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -23,44 +23,19 @@ jobs:
           components: rustfmt, clippy
           target: x86_64-unknown-linux-gnu
 
-      - name: Build Release Binary
+      - name: Build
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-unknown-linux-gnu
 
-      - name: Install linuxdeploy (AppImage)
-        id: linuxdeploy
-        uses: miurahr/install-linuxdeploy-action@v1
-        with:
-          plugins: appimage
-
-      - name: Create AppDir for x86_64
-        run: |
-          mkdir -p appdir/usr/bin appdir/usr/share/applications
-          cp target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} appdir/usr/bin/
-          cat > appdir/usr/share/applications/${{ env.BINARY_NAME }}.desktop <<EOF
-          [Desktop Entry]
-          Name=${{ env.BINARY_NAME }}
-          Exec=${{ env.BINARY_NAME }}
-          Icon=${{ env.BINARY_NAME }}
-          Type=Application
-          Categories=Utility;
-          EOF
-
-      - name: Build AppImage (x86_64)
-        run: |
-          ${{ steps.linuxdeploy.outputs.linuxdeploy }} \
-            --appdir appdir --output appimage
-
-      - name: Upload x86_64 AppImage
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-x64-appimage
-          path: '*.AppImage'
-
+          name: linux-x64
+          path: target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
   # ───────────────────────────────────────────────────────────────────────────
-  # Linux ARM64 (AppImage)
+  # Linux ARM64 (native)
   build-linux-arm64:
-    name: Build Linux ARM64 & AppImage
+    name: Build Linux ARM64
     runs-on: ubuntu-22.04-arm
     steps:
       - uses: actions/checkout@v3
@@ -72,107 +47,91 @@ jobs:
           components: rustfmt, clippy
           target: aarch64-unknown-linux-gnu
 
-      - name: Build Release Binary
+      - name: Build
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-unknown-linux-gnu
 
-      - name: Install linuxdeploy (AppImage)
-        id: linuxdeploy
-        uses: miurahr/install-linuxdeploy-action@v1
-        with:
-          plugins: appimage
-
-      - name: Create AppDir for ARM64
-        run: |
-          mkdir -p appdir/usr/bin appdir/usr/share/applications
-          cp target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} appdir/usr/bin/
-          cat > appdir/usr/share/applications/${{ env.BINARY_NAME }}.desktop <<EOF
-          [Desktop Entry]
-          Name=${{ env.BINARY_NAME }}
-          Exec=${{ env.BINARY_NAME }}
-          Icon=${{ env.BINARY_NAME }}
-          Type=Application
-          Categories=Utility;
-          EOF
-
-      - name: Build AppImage (ARM64)
-        run: |
-          ${{ steps.linuxdeploy.outputs.linuxdeploy }} \
-            --appdir appdir --output appimage
-
-      - name: Upload ARM64 AppImage
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-arm64-appimage
-          path: '*.AppImage'
-
+          name: linux-arm64
+          path: target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
   # ───────────────────────────────────────────────────────────────────────────
-  # macOS universal (.app bundle)
-  build-macos-app:
-    name: Build macOS Universal .app
+  # macOS slices (Intel + ARM)
+  build-macos-slices:
+    name: Build macOS slices
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
 
-      - name: Uninstall Homebrew rustup (if any)
+      - name: Uninstall Homebrew rustup
         run: brew uninstall rustup rustup-init || true
 
-      # ← NEW: install both darwin targets so rustc can find `core`
-      - name: Add macOS build targets
-        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
-
-      - name: Set up Rust for both architectures
+      - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
+          target: x86_64-apple-darwin
 
       - name: Build Intel slice
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-apple-darwin
 
+      - name: Set up Rust for ARM64
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          target: aarch64-apple-darwin
+
       - name: Build ARM64 slice
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-apple-darwin
+
+      - name: Upload Intel slice
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x64
+          path: target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
+
+      - name: Upload ARM64 slice
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # macOS universal (depends on slices)
+  package-macos:
+    name: Package macOS Universal
+    needs: build-macos-slices
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download Intel slice
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-x64
+          path: slice-x64
+
+      - name: Download ARM64 slice
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-arm64
+          path: slice-arm64
 
       - name: Create universal binary
         run: |
           mkdir -p target/universal/release
           lipo \
-            target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }} \
-            target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }} \
+            slice-x64/${{ env.BINARY_NAME }} \
+            slice-arm64/${{ env.BINARY_NAME }} \
             -create -output target/universal/release/${{ env.BINARY_NAME }}
-
-      - name: Create .app bundle
-        run: |
-          APP=target/universal/release/${{ env.BINARY_NAME }}.app
-          mkdir -p $APP/Contents/{MacOS,Resources}
-          cp target/universal/release/${{ env.BINARY_NAME }} $APP/Contents/MacOS/
-
-          cat > $APP/Contents/Info.plist <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-                   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0"><dict>
-            <key>CFBundleName</key><string>${{ env.BINARY_NAME }}</string>
-            <key>CFBundleExecutable</key><string>${{ env.BINARY_NAME }}</string>
-            <key>CFBundleIdentifier</key><string>com.example.${{ env.BINARY_NAME }}</string>
-            <key>CFBundleVersion</key><string>1.0</string>
-            <key>CFBundleIconFile</key><string>icon.icns</string>
-          </dict></plist>
-          EOF
-          # (Optional) cp assets/icon.icns $APP/Contents/Resources/
-
-      - name: Zip .app for distribution
-        run: |
-          ditto -c -k --sequesterRsrc --keepParent \
-            target/universal/release/${{ env.BINARY_NAME }}.app \
-            pair-macos.zip
-
-      - name: Upload macOS .app artifact
+      - name: Upload universal artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-app
-          path: pair-macos.zip
-
+          name: macos-universal
+          path: target/universal/release/${{ env.BINARY_NAME }}
 
   # ───────────────────────────────────────────────────────────────────────────
   # Windows MSVC (native)
@@ -189,11 +148,61 @@ jobs:
           components: rustfmt, clippy
           target: x86_64-pc-windows-msvc
 
-      - name: Build Release Binary
+      - name: Build
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
-
-      - name: Upload Windows executable
+      
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-msvc
           path: target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe
+
+  package-macos-app:
+    name: Package macOS .app
+    needs: build-macos-slices
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --force
+      - name: Bundle into .app
+        run: cargo bundle --release --format osx-app --target universal-darwin
+      - name: Upload .app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-app
+          path: target/release/bundle/osx/${{ env.BINARY_NAME }}.app
+
+  package-linux-appimage:
+    name: Package Linux AppImage
+    needs: build-linux-x64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Download Linux x64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-x64
+          path: release/
+      - name: Install linuxdeploy
+        uses: pcolby/install-linuxdeploy@v1
+      - name: Create AppDir layout
+        run: |
+          mkdir -p AppDir/usr/bin
+          cp release/${{ env.BINARY_NAME }} AppDir/usr/bin/
+          cat > AppDir/${{ env.BINARY_NAME }}.desktop <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=${{ env.BINARY_NAME }}
+          Exec=${{ env.BINARY_NAME }}
+          Icon=${{ env.BINARY_NAME }}
+          Categories=Utility;
+          EOF
+          cp path/to/icon.png AppDir/${{ env.BINARY_NAME }}.png
+      - name: Generate AppImage
+        run: linuxdeploy --appdir AppDir --output appimage
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: '*.AppImage'
