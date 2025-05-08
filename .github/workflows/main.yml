@@ -67,7 +67,7 @@ jobs:
       - name: Uninstall Homebrew rustup
         run: brew uninstall rustup rustup-init || true
 
-      - name: Set up Rust
+      - name: Set up Rust for x86_64
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -127,11 +127,83 @@ jobs:
             slice-x64/${{ env.BINARY_NAME }} \
             slice-arm64/${{ env.BINARY_NAME }} \
             -create -output target/universal/release/${{ env.BINARY_NAME }}
+
       - name: Upload universal artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-universal
           path: target/universal/release/${{ env.BINARY_NAME }}
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Package macOS .app
+  package-macos-app:
+    name: Package macOS .app
+    needs: package-macos
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --force
+
+      - name: Bundle into .app
+        run: |
+          cargo bundle --release --format osx --target x86_64-apple-darwin
+
+      - name: Upload .app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-app
+          path: target/release/bundle/osx/${{ env.BINARY_NAME }}.app
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Package Linux AppImage
+  package-linux-appimage:
+    name: Package Linux AppImage
+    needs: build-linux-x64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download Linux x64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-x64
+          path: release/
+
+      - name: Install linuxdeploy
+        uses: pcolby/install-linuxdeploy@v1
+
+      - name: Create AppDir layout
+        run: |
+          mkdir -p AppDir/usr/bin
+          cp release/${{ env.BINARY_NAME }} AppDir/usr/bin/
+
+          cat > AppDir/${{ env.BINARY_NAME }}.desktop <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=${{ env.BINARY_NAME }}
+          Exec=${{ env.BINARY_NAME }}
+          Icon=${{ env.BINARY_NAME }}
+          Categories=Utility;
+          EOF
+
+          ICON_PATH="path/to/icon.png"
+          if [ -f "$ICON_PATH" ]; then
+            cp "$ICON_PATH" AppDir/${{ env.BINARY_NAME }}.png
+          else
+            echo "Warning: Icon file not found at $ICON_PATH. Skipping icon inclusion."
+          fi
+
+      - name: Generate AppImage
+        run: |
+          linuxdeploy --appdir AppDir --output appimage
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: '*.AppImage'
 
   # ───────────────────────────────────────────────────────────────────────────
   # Windows MSVC (native)
@@ -150,59 +222,9 @@ jobs:
 
       - name: Build
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
-      
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-msvc
           path: target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe
-
-  package-macos-app:
-    name: Package macOS .app
-    needs: build-macos-slices
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Install cargo-bundle
-        run: cargo install cargo-bundle --force
-      - name: Bundle into .app
-        run: cargo bundle --release --format osx-app --target universal-darwin
-      - name: Upload .app artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-app
-          path: target/release/bundle/osx/${{ env.BINARY_NAME }}.app
-
-  package-linux-appimage:
-    name: Package Linux AppImage
-    needs: build-linux-x64
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Download Linux x64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-x64
-          path: release/
-      - name: Install linuxdeploy
-        uses: pcolby/install-linuxdeploy@v1
-      - name: Create AppDir layout
-        run: |
-          mkdir -p AppDir/usr/bin
-          cp release/${{ env.BINARY_NAME }} AppDir/usr/bin/
-          cat > AppDir/${{ env.BINARY_NAME }}.desktop <<EOF
-          [Desktop Entry]
-          Type=Application
-          Name=${{ env.BINARY_NAME }}
-          Exec=${{ env.BINARY_NAME }}
-          Icon=${{ env.BINARY_NAME }}
-          Categories=Utility;
-          EOF
-          cp path/to/icon.png AppDir/${{ env.BINARY_NAME }}.png
-      - name: Generate AppImage
-        run: linuxdeploy --appdir AppDir --output appimage
-      - name: Upload AppImage
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-appimage
-          path: '*.AppImage'
