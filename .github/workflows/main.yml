@@ -9,9 +9,9 @@ env:
 
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
-  # Linux x86_64 (native + AppImage)
+  # Linux x86_64 (native)
   build-linux-x64:
-    name: Build & Bundle Linux x86_64
+    name: Build Linux x86_64
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -23,35 +23,19 @@ jobs:
           components: rustfmt, clippy
           target: x86_64-unknown-linux-gnu
 
-      - name: Build native binary
+      - name: Build
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-unknown-linux-gnu
 
-      - name: Install cargo-bundle
-        run: cargo install cargo-bundle
-
-      - name: Create AppImage
-        run: |
-          # Ensure binary is in target/release
-          cp target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} target/release/
-          # Bundle as AppImage
-          cargo bundle --release --bin ${{ env.BINARY_NAME }} --format appimage --target x86_64-unknown-linux-gnu
-
-      - name: Upload native binary
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-x64-binary
+          name: linux-x64
           path: target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
-      - name: Upload AppImage
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-x64-appimage
-          path: target/release/bundle/appimage/${{ env.BINARY_NAME }}*.AppImage
-
   # ───────────────────────────────────────────────────────────────────────────
-  # Linux ARM64 (native + AppImage)
+  # Linux ARM64 (native)
   build-linux-arm64:
-    name: Build & Bundle Linux ARM64
+    name: Build Linux ARM64
     runs-on: ubuntu-22.04-arm
     steps:
       - uses: actions/checkout@v3
@@ -63,67 +47,62 @@ jobs:
           components: rustfmt, clippy
           target: aarch64-unknown-linux-gnu
 
-      - name: Build native binary
+      - name: Build
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-unknown-linux-gnu
 
-      - name: Install cargo-bundle
-        run: cargo install cargo-bundle
-
-      - name: Create AppImage
-        run: |
-          cp target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} target/release/
-          cargo bundle --release --bin ${{ env.BINARY_NAME }} --format appimage --target aarch64-unknown-linux-gnu
-
-      - name: Upload native binary
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-arm64-binary
+          name: linux-arm64
           path: target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
-      - name: Upload AppImage
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-arm64-appimage
-          path: target/release/bundle/appimage/${{ env.BINARY_NAME }}*.AppImage
-
   # ───────────────────────────────────────────────────────────────────────────
-# macOS slices (Intel + ARM in parallel)
+  # macOS slices (Intel + ARM)
   build-macos-slices:
     name: Build macOS slices
     runs-on: macos-latest
-    strategy:
-      matrix:
-        include:
-          - arch: x86_64-apple-darwin
-            slice: x64
-          - arch: aarch64-apple-darwin
-            slice: arm64
     steps:
       - uses: actions/checkout@v3
 
       - name: Uninstall Homebrew rustup
         run: brew uninstall rustup rustup-init || true
 
-      - name: Set up Rust for ${{ matrix.slice }}
+      - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
-          target: ${{ matrix.arch }}
+          target: x86_64-apple-darwin
 
-      - name: Build ${{ matrix.slice }} slice
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target ${{ matrix.arch }}
+      - name: Build Intel slice
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-apple-darwin
 
-      - name: Upload ${{ matrix.slice }} slice
+      - name: Set up Rust for ARM64
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          target: aarch64-apple-darwin
+
+      - name: Build ARM64 slice
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-apple-darwin
+
+      - name: Upload Intel slice
         uses: actions/upload-artifact@v4
         with:
-          name: macos-${{ matrix.slice }}-binary
-          path: target/${{ matrix.arch }}/release/${{ env.BINARY_NAME }}
+          name: macos-x64
+          path: target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
+
+      - name: Upload ARM64 slice
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
 
   # ───────────────────────────────────────────────────────────────────────────
-  # macOS universal + .app bundle
+  # macOS universal (depends on slices)
   package-macos:
-    name: Package macOS Universal & .app
+    name: Package macOS Universal
     needs: build-macos-slices
     runs-on: macos-latest
     steps:
@@ -132,13 +111,13 @@ jobs:
       - name: Download Intel slice
         uses: actions/download-artifact@v4
         with:
-          name: macos-x64-binary
+          name: macos-x64
           path: slice-x64
 
       - name: Download ARM64 slice
         uses: actions/download-artifact@v4
         with:
-          name: macos-arm64-binary
+          name: macos-arm64
           path: slice-arm64
 
       - name: Create universal binary
@@ -148,29 +127,14 @@ jobs:
             slice-x64/${{ env.BINARY_NAME }} \
             slice-arm64/${{ env.BINARY_NAME }} \
             -create -output target/universal/release/${{ env.BINARY_NAME }}
-
-      - name: Install cargo-bundle
-        run: cargo install cargo-bundle
-
-      - name: Create .app bundle
-        run: |
-          cp target/universal/release/${{ env.BINARY_NAME }} target/release/
-          cargo bundle --release --bin ${{ env.BINARY_NAME }} --format osx
-
-      - name: Upload universal binary
+      - name: Upload universal artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-universal-binary
+          name: macos-universal
           path: target/universal/release/${{ env.BINARY_NAME }}
 
-      - name: Upload .app bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-app
-          path: target/release/bundle/osx/${{ env.BINARY_NAME }}.app
-
   # ───────────────────────────────────────────────────────────────────────────
-  # Windows MSVC (native only)
+  # Windows MSVC (native)
   build-windows:
     name: Build Windows (MSVC)
     runs-on: windows-latest
