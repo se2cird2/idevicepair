@@ -6,13 +6,18 @@ on:
 
 env:
   BINARY_NAME: pair
-
+  FLATPAK_ID: org.example.MyApp
+  APPIMAGE_ICON: icons/256x256.png
+  APPIMAGE_DESKTOP: myapp.desktop
+  
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
   # Linux x86_64 (native)
   build-linux-x64:
     name: Build Linux x86_64
     runs-on: ubuntu-latest
+    outputs:
+      artifact-name: linux-x64
     steps:
       - uses: actions/checkout@v3
 
@@ -37,6 +42,8 @@ jobs:
   build-linux-arm64:
     name: Build Linux ARM64
     runs-on: ubuntu-22.04-arm
+    outputs:
+      artifact-name: linux-arm64
     steps:
       - uses: actions/checkout@v3
 
@@ -57,6 +64,186 @@ jobs:
           path: target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
   # ───────────────────────────────────────────────────────────────────────────
+  # Flatpak x86_64
+  package-flatpak:
+    name: Package Flatpak (x86_64)
+    runs-on: ubuntu-latest
+    needs: build-linux-x64
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-linux-x64.outputs.artifact-name }}
+          path: .
+
+      - name: Install Flatpak build tools
+        run: |
+          sudo apt update && sudo apt install -y flatpak-builder
+
+      - name: Create manifest
+        run: |
+          cat > ${FLATPAK_ID}.json <<EOF
+          {
+            "app-id": "${FLATPAK_ID}",
+            "runtime": "org.freedesktop.Platform",
+            "runtime-version": "21.08",
+            "sdk": "org.freedesktop.Sdk",
+            "command": "${BINARY_NAME}",
+            "modules": [{
+              "name": "${BINARY_NAME}",
+              "buildsystem": "simple",
+              "build-commands": [
+                "install -Dm755 ${BINARY_NAME} \${FLATPAK_DEST}/bin/${BINARY_NAME}"
+              ],
+              "sources": [{ "type": "file", "path": "${BINARY_NAME}" }]
+            }]
+          }
+          EOF
+
+      - name: Build & bundle
+        run: |
+          flatpak-builder --force-clean --repo=repo build-dir ${FLATPAK_ID}.json
+          flatpak build-bundle repo ${FLATPAK_ID}.flatpak org.freedesktop.Platform 21.08
+
+      - name: Upload Flatpak
+        uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-x64
+          path: ${FLATPAK_ID}.flatpak
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Flatpak ARM64
+  package-flatpak-arm64:
+    name: Package Flatpak (ARM64)
+    runs-on: ubuntu-22.04-arm
+    needs: build-linux-arm64
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-linux-arm64.outputs.artifact-name }}
+          path: .
+
+      - name: Install Flatpak build tools
+        run: |
+          sudo apt update && sudo apt install -y flatpak-builder
+
+      - name: Create manifest
+        run: |
+          cat > ${FLATPAK_ID}.arm64.json <<EOF
+          {
+            "app-id": "${FLATPAK_ID}",
+            "runtime": "org.freedesktop.Platfor",
+            "runtime-version": "21.08",
+            "sdk": "org.freedesktop.Sdk",
+            "command": "${BINARY_NAME}",
+            "modules": [{
+              "name": "${BINARY_NAME}",
+              "buildsystem": "simple",
+              "build-commands": [
+                "install -Dm755 ${BINARY_NAME} \${FLATPAK_DEST}/bin/${BINARY_NAME}"
+              ],
+              "sources": [{ "type": "file", "path": "${BINARY_NAME}" }]
+            }]
+          }
+          EOF
+
+      - name: Build & bundle
+        run: |
+          flatpak-builder --force-clean --repo=repo-arm64 build-dir-arm64 ${FLATPAK_ID}.arm64.json
+          flatpak build-bundle repo-arm64 ${FLATPAK_ID}.arm64.flatpak org.freedesktop.Platform 21.08
+
+      - name: Upload Flatpak
+        uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-arm64
+          path: ${FLATPAK_ID}.arm64.flatpak
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # AppImage x86_64
+  package-appimage:
+    name: Package AppImage (x86_64)
+    runs-on: ubuntu-latest
+    needs: build-linux-x64
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-linux-x64.outputs.artifact-name }}
+          path: .
+
+      - name: Install AppImage tooling
+        run: |
+          sudo apt update && sudo apt install -y wget fuse libfuse2 patchelf
+          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage
+          chmod +x linuxdeploy-*.AppImage
+
+      - name: Create AppDir
+        run: |
+          mkdir -p AppDir/usr/bin
+          install -Dm755 ${BINARY_NAME} AppDir/usr/bin/${BINARY_NAME}
+          install -Dm644 ${APPIMAGE_DESKTOP} AppDir/${APPIMAGE_DESKTOP}
+          install -Dm644 ${APPIMAGE_ICON} AppDir/${APPIMAGE_ICON}
+
+      - name: Build AppImage
+        run: |
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --desktop-file ${APPIMAGE_DESKTOP} --icon-file ${APPIMAGE_ICON} --output dir
+          ./linuxdeploy-plugin-appimage-x86_64.AppImage --appdir AppDir --output appimage
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage-x64
+          path: *.AppImage
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # AppImage ARM64
+  package-appimage-arm64:
+    name: Package AppImage (ARM64)
+    runs-on: ubuntu-22.04-arm
+    needs: build-linux-arm64
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-linux-arm64.outputs.artifact-name }}
+          path: .
+
+      - name: Install AppImage tooling
+        run: |
+          sudo apt update && sudo apt install -y wget fuse libfuse2 patchelf
+          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+          wget https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-aarch64.AppImage
+          chmod +x linuxdeploy-*.AppImage
+
+      - name: Create AppDir
+        run: |
+          mkdir -p AppDir/usr/bin
+          install -Dm755 ${BINARY_NAME} AppDir/usr/bin/${BINARY_NAME}
+          install -Dm644 ${APPIMAGE_DESKTOP} AppDir/${APPIMAGE_DESKTOP}
+          install -Dm644 ${APPIMAGE_ICON} AppDir/${APPIMAGE_ICON}
+
+      - name: Build AppImage
+        run: |
+          ./linuxdeploy-aarch64.AppImage --appdir AppDir --desktop-file ${APPIMAGE_DESKTOP} --icon-file ${APPIMAGE_ICON} --output dir
+          ./linuxdeploy-plugin-appimage-aarch64.AppImage --appdir AppDir --output appimage
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage-arm64
+          path: *.AppImage
+
+  # ───────────────────────────────────────────────────────────────────────────
   # macOS slices (Intel + ARM)
   build-macos-slices:
     name: Build macOS slices
@@ -64,15 +251,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Add macOS targets
-        run: |
-          rustup target add x86_64-apple-darwin
-          rustup target add aarch64-apple-darwin
-
       - name: Uninstall Homebrew rustup
         run: brew uninstall rustup rustup-init || true
 
-      - name: Set up Rust (Intel)
+      - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -82,7 +264,7 @@ jobs:
       - name: Build Intel slice
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-apple-darwin
 
-      - name: Set up Rust (ARM64)
+      - name: Set up Rust for ARM64
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -132,86 +314,11 @@ jobs:
             slice-x64/${{ env.BINARY_NAME }} \
             slice-arm64/${{ env.BINARY_NAME }} \
             -create -output target/universal/release/${{ env.BINARY_NAME }}
-
       - name: Upload universal artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-universal
           path: target/universal/release/${{ env.BINARY_NAME }}
-
-  # ───────────────────────────────────────────────────────────────────────────
-  # Package macOS .app
-  package-macos-app:
-    name: Package macOS .app
-    needs: package-macos
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Install cargo-bundle
-        run: cargo install cargo-bundle --force
-
-      - name: Bundle into .app
-        run: cargo bundle --release --format osx --target x86_64-apple-darwin
-
-      - name: Upload .app artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-app
-          path: target/release/bundle/osx/${{ env.BINARY_NAME }}.app
-
-  # ───────────────────────────────────────────────────────────────────────────
-  # Package Linux AppImage
-  package-linux-appimage:
-    name: Package Linux AppImage
-    needs: build-linux-x64
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Download Linux x64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-x64
-          path: release/
-
-      - name: Install LinuxDeploy
-        id: install-linuxdeploy
-        uses: miurahr/install-linuxdeploy-action@v1
-        with:
-          plugins: appimage
-
-      - name: Create AppDir layout
-        run: |
-          mkdir -p AppDir/usr/bin
-          cp release/${{ env.BINARY_NAME }} AppDir/usr/bin/
-
-          cat > AppDir/${{ env.BINARY_NAME }}.desktop <<EOF
-          [Desktop Entry]
-          Type=Application
-          Name=${{ env.BINARY_NAME }}
-          Exec=${{ env.BINARY_NAME }}
-          Icon=${{ env.BINARY_NAME }}
-          Categories=Utility;
-          EOF
-
-          ICON_PATH="path/to/icon.png"
-          if [ -f "$ICON_PATH" ]; then
-            cp "$ICON_PATH" AppDir/${{ env.BINARY_NAME }}.png
-          else
-            echo "Warning: Icon file not found at $ICON_PATH. Skipping icon inclusion."
-          fi
-
-      - name: Generate AppImage
-        run: |
-          chmod +x ${{ steps.install-linuxdeploy.outputs.linuxdeploy }}
-          ${{ steps.install-linuxdeploy.outputs.linuxdeploy }} --appdir AppDir --output appimage
-
-      - name: Upload AppImage
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-appimage
-          path: '*.AppImage'
 
   # ───────────────────────────────────────────────────────────────────────────
   # Windows MSVC (native)
@@ -230,7 +337,7 @@ jobs:
 
       - name: Build
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
-
+      
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
