@@ -11,68 +11,76 @@ env:
   ICON_PNG: icons/idevicepair.png
 
 jobs:
-  build-linux:
-    name: Build AppImage (x86_64 & ARM64)
+  build-linux-x64:
+    name: Build AppImage for x86_64
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Set up Rust
+      - name: Set up Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
+          target: x86_64-unknown-linux-gnu
 
-      - name: Install FUSE and AppStream dependencies
+      - name: Install FUSE & AppStream dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libfuse2 appstream
 
-      - name: Build binaries
+      - name: Build x86_64 binary
         run: |
-          cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-unknown-linux-gnu
-          cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-unknown-linux-gnu
+          cargo build --release --bin ${{ env.BINARY_NAME }} \
+            --target x86_64-unknown-linux-gnu
 
-      - name: Build AppImages
+      - name: Create AppImage (x86_64)
         uses: AppImageCrafters/build-appimage-action@v1
         with:
-          recipe: ".github/appimage-builder.yml"
+          recipe: .github/appimage-builder.yml
         env:
-          UPDATE_INFO: "gh-releases-zsync|${{ github.repository_owner }}|${{ github.repository }}|latest|*.AppImage.zsync"
+          UPDATE_INFO: gh-releases-zsync|${{ github.repository_owner }}|${{ github.repository }}|latest|*.AppImage.zsync
 
-      - name: Upload AppImages
+      - name: Upload x86_64 AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: appimages
-          path: "out/*.AppImage"
+          name: iDevicePair-${{ env.VERSION }}-x86_64.AppImage
+          path: "*.AppImage"
 
+  build-linux-arm64:
+    name: Build AppImage for ARM64
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-app: idevicepair
-version: 1.0.0
+      - name: Set up Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          target: aarch64-unknown-linux-gnu
 
-sources:
-  - type: dir
-    path: target/x86_64-unknown-linux-gnu/release
-    include:
-      - pair
-  - type: dir
-    path: target/aarch64-unknown-linux-gnu/release
-    include:
-      - pair
+      - name: Install FUSE & AppStream dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2 appstream
 
-appdir:
-  path: AppDir
+      - name: Build ARM64 binary
+        run: |
+          cargo build --release --bin ${{ env.BINARY_NAME }} \
+            --target aarch64-unknown-linux-gnu
 
-icon: idevicepair
+      - name: Create AppImage (ARM64)
+        uses: AppImageCrafters/build-appimage-action@v1
+        with:
+          recipe: .github/appimage-builder.yml
+        env:
+          UPDATE_INFO: gh-releases-zsync|${{ github.repository_owner }}|${{ github.repository }}|latest|*.AppImage.zsync
 
-desktop:
-  Name: iDevicePair
-  Exec: pair
-  Icon: idevicepair
-  Categories:
-    - Utility
-
-files:
-  - source: icons/idevicepair.png
-    destination: usr/share/icons/hicolor/256x256/apps/idevicepair.png
+      - name: Upload ARM64 AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: iDevicePair-${{ env.VERSION }}-aarch64.AppImage
+          path: "*.AppImage"
