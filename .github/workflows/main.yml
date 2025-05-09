@@ -10,7 +10,7 @@ env:
   ICON_PNG: icons/idevicepair.png
 
 jobs:
-  # Linux: Build AppImage for x86_64 and aarch64
+
   build-appimage:
     name: Build AppImage for ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
@@ -71,117 +71,92 @@ jobs:
           name: iDevicePair-${{ env.VERSION }}-${{ matrix.arch }}.AppImage
           path: iDevicePair-${{ env.VERSION }}-${{ matrix.arch }}.AppImage
 
-  # macOS: Build slices and bundle
-  macos-slices:
-    name: Build macOS Slices
+  build-macos-app:
+    name: Build macOS Universal .app
     runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [x86_64, arm64]
+        include:
+          - arch: x86_64
+            target: x86_64-apple-darwin
+          - arch: arm64
+            target: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v3
-      - name: Uninstall Homebrew rustup
-        run: brew uninstall rustup rustup-init || true
-      - name: Set up Rust (x86_64)
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: x86_64-apple-darwin
-      - name: Build Intel slice
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-apple-darwin
-      - name: Set up Rust (ARM64)
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: aarch64-apple-darwin
-      - name: Build ARM64 slice
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-apple-darwin
-      - name: Upload Intel slice
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-x64
-          path: target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
-      - name: Upload ARM64 slice
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-arm64
-          path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
 
-  macos-universal:
-    name: Create Universal Binary
-    needs: macos-slices
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          target: ${{ matrix.target }}
+
+      - name: Build slice ${{ matrix.arch }}
+        run: |
+          cargo build --release --bin ${BINARY_NAME} --target ${{ matrix.target }}
+
+      - name: Upload slice artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: slice-${{ matrix.arch }}
+          path: target/${{ matrix.target }}/release/${BINARY_NAME}
+
+  create-universal-app:
+    name: Create Universal .app Bundle
+    needs: build-macos-app
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Download Intel slice
+
+      - name: Download x86_64 slice
         uses: actions/download-artifact@v4
         with:
-          name: macos-x64
-          path: slice-x64
-      - name: Download ARM64 slice
+          name: slice-x86_64
+          path: slice-x86_64
+
+      - name: Download arm64 slice
         uses: actions/download-artifact@v4
         with:
-          name: macos-arm64
+          name: slice-arm64
           path: slice-arm64
-      - name: Build universal binary
-        run: |
-          mkdir -p release
-          lipo slice-x64/${{ env.BINARY_NAME }} slice-arm64/${{ env.BINARY_NAME }} -create -output release/${{ env.BINARY_NAME }}
-      - name: Upload universal artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-universal
-          path: release/${{ env.BINARY_NAME }}
 
-  macos-bundle-hdiutil:
-    name: Bundle .app & .dmg (hdiutil)
-    needs: macos-universal
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Download Universal Binary
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-universal
-          path: release
-      - name: Create .app Bundle
+      - name: Create universal binary
         run: |
-          APP=${{ env.BINARY_NAME }}
-          mkdir -p "${APP}.app/Contents/MacOS" "${APP}.app/Contents/Resources"
-          cp release/${APP} "${APP}.app/Contents/MacOS/${APP}"
-          chmod +x "${APP}.app/Contents/MacOS/${APP}"
-          cat > "${APP}.app/Contents/Info.plist" <<EOF
+          mkdir -p build
+          lipo slice-x86_64/${BINARY_NAME} slice-arm64/${BINARY_NAME} \
+            -create -output build/${BINARY_NAME}
+
+      - name: Bundle into .app
+        run: |
+          APP=${BINARY_NAME}.app
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp build/${BINARY_NAME} "$APP/Contents/MacOS/${BINARY_NAME}"
+          chmod +x "$APP/Contents/MacOS/${BINARY_NAME}"
+          cat > "$APP/Contents/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-            <key>CFBundleName</key><string>${APP}</string>
-            <key>CFBundleIdentifier</key><string>com.github.se2cird2.${APP}</string>
+            <key>CFBundleName</key><string>${BINARY_NAME}</string>
+            <key>CFBundleIdentifier</key><string>com.github.se2cird2.${BINARY_NAME}</string>
             <key>CFBundleVersion</key><string>${VERSION}</string>
             <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-            <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            <key>CFBundleExecutable</key><string>${APP}</string>
+            <key>CFBundleExecutable</key><string>${BINARY_NAME}</string>
             <key>CFBundleIconFile</key><string>idevicepair.icns</string>
           </dict>
           </plist>
           EOF
-          sips -s format icns "${{ env.ICON_PNG }}" --out "${APP}.app/Contents/Resources/idevicepair.icns"
-          xattr -rc "${APP}.app"
-          codesign --deep --force --sign - "${APP}.app"
-          plutil -lint "${APP}.app/Contents/Info.plist"
-      - name: Generate DMG with hdiutil
-        run: |
-          APP=${{ env.BINARY_NAME }}
-          mkdir -p release
-          rm -f "release/${APP}.dmg"
-          hdiutil create -volname "$APP" -srcfolder "${APP}.app" -ov -format UDZO "release/${APP}.dmg"
-      - name: Upload .app and .dmg
+          # Icon conversion
+          sips -s format icns "${ICON_PNG}" --out "$APP/Contents/Resources/idevicepair.icns"
+          # Remove quarantine attrs
+          xattr -rc "$APP"
+
+      - name: Upload .app artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-distribution-hdiutil
-          path: |
-            ${{ env.BINARY_NAME }}.app
-            release/${{ env.BINARY_NAME }}.dmg
+          name: iDevicePair-${VERSION}.app
+          path: iDevicePair.app
 
   build-windows:
     name: Build Windows (MSVC)
