@@ -66,18 +66,36 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v3
+
+      # Download the appropriate Rust-built binary artifact
+      - name: Download x86_64 binary
+        if: matrix.arch == 'x86_64'
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-x64
+          path: build-artifacts
+
+      - name: Download ARM64 binary
+        if: matrix.arch == 'aarch64'
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-arm64
+          path: build-artifacts
+
       - name: Prepare binary
         run: |
           if [ "${{ matrix.arch }}" = "x86_64" ]; then
-            cp target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} ${BINARY_NAME}
+            cp build-artifacts/${{ env.BINARY_NAME }} .
           else
-            cp target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} ${BINARY_NAME}
+            cp build-artifacts/${{ env.BINARY_NAME }} .
           fi
+
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           manifest-path: ${{ env.FLATPAK_ID }}.json
           bundle: ${{ env.FLATPAK_ID }}-${{ matrix.arch }}.flatpak
+
       - name: Upload Flatpak bundle
         uses: actions/upload-artifact@v4
         with:
