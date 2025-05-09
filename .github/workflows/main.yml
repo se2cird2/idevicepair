@@ -90,6 +90,26 @@ jobs:
             cp build-artifacts/${{ env.BINARY_NAME }} .
           fi
 
+      - name: Create Flatpak manifest
+        run: |
+          cat > ${{ env.FLATPAK_ID }}.json <<EOF
+          {
+            "app-id": "${{ env.FLATPAK_ID }}",
+            "runtime": "org.freedesktop.Platform",
+            "runtime-version": "21.08",
+            "sdk": "org.freedesktop.Sdk",
+            "command": "${{ env.BINARY_NAME }}",
+            "modules": [{
+              "name": "${{ env.BINARY_NAME }}",
+              "buildsystem": "simple",
+              "build-commands": [
+                "install -Dm755 ${{ env.BINARY_NAME }} ${FLATPAK_DEST}/bin/${{ env.BINARY_NAME }}"
+              ],
+              "sources": [{ "type": "file", "path": "${{ env.BINARY_NAME }}" }]
+            }]
+          }
+          EOF
+
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
