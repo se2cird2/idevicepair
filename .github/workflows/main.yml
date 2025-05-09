@@ -100,121 +100,90 @@ jobs:
           name: flatpak-${{ matrix.arch }}
           path: ${FLATPAK_ID}-${{ matrix.arch }}.flatpak
 
-  build-macos-slices:
-    name: Build macOS slices
+build-macos-slices:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Uninstall Homebrew rustup
-        run: brew uninstall rustup rustup-init || true
-      - name: Set up Rust (x86_64)
-        uses: actions-rs/toolchain@v1
+      - run: brew uninstall rustup rustup-init || true
+      - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-          components: rustfmt, clippy
           target: x86_64-apple-darwin
-      - name: Build Intel slice
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} \
-             --target x86_64-apple-darwin
-      - name: Set up Rust (ARM64)
-        uses: actions-rs/toolchain@v1
+      - run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-apple-darwin
+      - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-          components: rustfmt, clippy
           target: aarch64-apple-darwin
-      - name: Build ARM64 slice
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} \
-             --target aarch64-apple-darwin
-      - name: Upload Intel slice
-        uses: actions/upload-artifact@v4
+      - run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-apple-darwin
+      - uses: actions/upload-artifact@v4
         with:
           name: macos-x64
           path: target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
-      - name: Upload ARM64 slice
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: macos-arm64
           path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
 
   package-macos-universal:
-    name: Create Universal macOS Binary
-    needs: build-macos-slices
     runs-on: macos-latest
+    needs: build-macos-slices
     steps:
-      - uses: actions/checkout@v3
-      - name: Download slices
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: macos-x64,macos-arm64
-          path: slice
-      - name: Create universal binary
-        run: |
+          name: macos-x64
+          path: slice-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-arm64
+          path: slice-arm64
+      - run: |
           mkdir -p release
-          lipo slice/x86_64-apple-darwin/release/${BINARY_NAME} \
-               slice/aarch64-apple-darwin/release/${BINARY_NAME} \
-               -create -output release/${BINARY_NAME}
-      - name: Upload universal artifact
-        uses: actions/upload-artifact@v4
+          lipo slice-x64/${{ env.BINARY_NAME }} slice-arm64/${{ env.BINARY_NAME }} -create -output release/${{ env.BINARY_NAME }}
+      - uses: actions/upload-artifact@v4
         with:
           name: macos-universal
           path: release/${{ env.BINARY_NAME }}
 
   package-macos-bundle:
-    name: Package macOS .app & .dmg
-    needs: package-macos-universal
     runs-on: macos-latest
+    needs: package-macos-universal
     steps:
-      - uses: actions/checkout@v3
-      - name: Download Universal Binary
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: macos-universal
           path: release
-      - name: Create .app Bundle
-        run: |
+      - run: |
           APP="${{ env.BINARY_NAME }}"
-          VERSION="1.0.0"
-          mkdir -p "${APP}.app/Contents/MacOS" \
-                   "${APP}.app/Contents/Resources"
+          mkdir -p "${APP}.app/Contents/MacOS" "${APP}.app/Contents/Resources"
           cp release/${APP} "${APP}.app/Contents/MacOS/${APP}"
           cat > "${APP}.app/Contents/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"  
             "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
             <dict>
               <key>CFBundleName</key><string>${APP}</string>
-              <key>CFBundleIdentifier</key><string>${FLATPAK_ID}</string>
-              <key>CFBundleVersion</key><string>${VERSION}</string>
+              <key>CFBundleIdentifier</key><string>${{ env.FLATPAK_ID }}</string>
+              <key>CFBundleVersion</key><string>1.0.0</string>
               <key>CFBundlePackageType</key><string>APPL</string>
               <key>CFBundleExecutable</key><string>${APP}</string>
               <key>CFBundleIconFile</key><string>idevicepair.icns</string>
             </dict>
           </plist>
           EOF
-      - name: Convert Icon to ICNS
-        run: |
-          sips -s format icns "${{ env.APPIMAGE_ICON }}" \
-            --out "${{ env.BINARY_NAME }}.app/Contents/Resources/idevicepair.icns"
-      - name: Install create-dmg
-        run: brew install create-dmg               # Homebrew install :contentReference[oaicite:8]{index=8}
-      - name: Generate DMG
-        run: |
+      - run: |
+          sips -s format icns "${{ env.APPIMAGE_ICON }}" --out "${{ env.BINARY_NAME }}.app/Contents/Resources/idevicepair.icns"
+      - run: |
           APP="${{ env.BINARY_NAME }}"
-          mkdir -p release
-          test -f release/${APP}.dmg && rm release/${APP}.dmg   # from README example :contentReference[oaicite:9]{index=9}
-          create-dmg \
-            --volname "${APP}"                                  # supported option :contentReference[oaicite:10]{index=10}
-            --format UDZO                                       # default compression :contentReference[oaicite:11]{index=11}
-            "release/${APP}.dmg" \
-            "${APP}.app"
-      - name: Upload .app and .dmg
-        uses: actions/upload-artifact@v4
+          rm -f "release/${APP}.dmg"
+          hdiutil create -volname "$APP" -srcfolder "${APP}.app" -ov -format UDZO "release/${APP}.dmg"
+      - uses: actions/upload-artifact@v4
         with:
           name: macos-distribution
           path: |
             ${{ env.BINARY_NAME }}.app
             release/${{ env.BINARY_NAME }}.dmg
+
 
   build-windows:
     name: Build Windows (MSVC)
