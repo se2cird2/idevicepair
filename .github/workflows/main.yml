@@ -27,7 +27,8 @@ jobs:
             toolfile: appimagetool-aarch64.AppImage
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -36,40 +37,43 @@ jobs:
           components: rustfmt, clippy
           target: ${{ matrix.target }}
 
-      - name: Install FUSE
+      - name: Install FUSE & AppStream
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfuse2
+          sudo apt-get install -y libfuse2 appstream
 
-      - name: Build Rust binary
+      - name: Build native binary
         run: |
           cargo build --release --bin ${{ env.BINARY_NAME }} \
             --target ${{ matrix.target }}
 
       - name: Download appimagetool
         run: |
-          wget -c https://github.com/AppImage/AppImageKit/releases/download/continuous/${{ matrix.toolfile }} \
+          wget -c \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/${{ matrix.toolfile }} \
             -O appimagetool.AppImage
           chmod +x appimagetool.AppImage
 
       - name: Prepare AppDir
         run: |
+          # create directories
           mkdir -p AppDir/usr/bin \
-                   AppDir/usr/share/applications \
                    AppDir/usr/share/icons/hicolor/256x256/apps
 
-          # Copy the binary
-          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} AppDir/usr/bin/
+          # copy the binary
+          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} \
+             AppDir/usr/bin/
 
-          # Derive icon basename
-          ICON_NAME=${ICON_PNG##*/}
-          ICON_BASENAME=${ICON_NAME%.*}
+          # derive icon name and basename
+          ICON_NAME=${ICON_PNG##*/}           # e.g. idevicepair.png
+          ICON_BASENAME=${ICON_NAME%.*}      # e.g. idevicepair
 
-          # Install icon
-          cp ${{ env.ICON_PNG }} AppDir/usr/share/icons/hicolor/256x256/apps/${ICON_BASENAME}.png
+          # install the icon into the hicolor theme
+          cp ${{ env.ICON_PNG }} \
+             AppDir/usr/share/icons/hicolor/256x256/apps/${ICON_BASENAME}.png
 
-          # Create desktop entry
-          cat > AppDir/usr/share/applications/${{ env.BINARY_NAME }}.desktop <<EOF
+          # write the .desktop file at the root of AppDir so appimagetool sees it
+          cat > AppDir/${{ env.BINARY_NAME }}.desktop <<EOF
           [Desktop Entry]
           Type=Application
           Name=iDevicePair
@@ -78,7 +82,7 @@ jobs:
           Categories=Utility;
           EOF
 
-          # Create AppRun symlink
+          # make the AppRun symlink so the runtime invokes your binary
           ln -s usr/bin/${{ env.BINARY_NAME }} AppDir/AppRun
           chmod +x AppDir/AppRun
 
