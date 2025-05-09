@@ -11,6 +11,7 @@ env:
   APPIMAGE_DESKTOP: packaging/idevicepair.desktop
 
 jobs:
+  # Linux x86_64 build
   build-linux-x64:
     name: Build Linux x86_64
     runs-on: ubuntu-latest
@@ -32,6 +33,7 @@ jobs:
           name: linux-x64
           path: target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
+  # Linux ARM64 build
   build-linux-arm64:
     name: Build Linux ARM64
     runs-on: ubuntu-22.04-arm
@@ -53,6 +55,7 @@ jobs:
           name: linux-arm64
           path: target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
+  # Flatpak bundles
   flatpak-build:
     name: Build Flatpak bundles
     runs-on: ubuntu-latest
@@ -111,6 +114,7 @@ jobs:
           name: flatpak-${{ matrix.arch }}
           path: ${{ env.FLATPAK_ID }}-${{ matrix.arch }}.flatpak
 
+  # macOS universal binary slices
   build-macos-slices:
     name: Build macOS slices
     runs-on: macos-latest
@@ -118,7 +122,7 @@ jobs:
       - uses: actions/checkout@v3
       - name: Uninstall Homebrew rustup
         run: brew uninstall rustup rustup-init || true
-      - name: Set up Rust
+      - name: Set up Rust (x86_64)
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -126,7 +130,7 @@ jobs:
           target: x86_64-apple-darwin
       - name: Build Intel slice
         run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-apple-darwin
-      - name: Set up Rust for ARM64
+      - name: Set up Rust (ARM64)
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -145,64 +149,18 @@ jobs:
           name: macos-arm64
           path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
 
-  package-macos:
-    name: Package macOS Universal
+  # Package macOS .app & .dmg
+  package-macos-bundle:
+    name: Package macOS .app & .dmg
     needs: build-macos-slices
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Download Intel slice
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-x64
-          path: slice-x64
-      - name: Download ARM64 slice
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-arm64
-          path: slice-arm64
-      - name: Create universal binary
-        run: |
-          mkdir -p target/universal/release
-          lipo slice-x64/${{ env.BINARY_NAME }} slice-arm64/${{ env.BINARY_NAME }} -create -output target/universal/release/${{ env.BINARY_NAME }}
-      - name: Upload universal artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-universal
-          path: target/universal/release/${{ env.BINARY_NAME }}
-
-  build-windows:
-    name: Build Windows (MSVC)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: x86_64-pc-windows-msvc
-      - name: Build
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-msvc
-          path: target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe
-
-  package-macos-bundle:
-    name: Package macOS .app & .dmg
-    needs: package-macos
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v3
-
       - name: Download Universal Binary
         uses: actions/download-artifact@v4
         with:
           name: macos-universal
           path: ./release
-
       - name: Create .app Bundle
         run: |
           APP="${{ env.BINARY_NAME }}"
@@ -224,18 +182,17 @@ jobs:
             </dict>
           </plist>
           EOF
-
       - name: Convert Icon to ICNS
         run: |
           sips -s format icns "${{ env.APPIMAGE_ICON }}" \
             --out "${{ env.BINARY_NAME }}.app/Contents/Resources/idevicepair.icns"
-
       - name: Generate DMG with create-dmg
         run: |
-          brew install create-dmg
-          create-dmg "${{ env.BINARY_NAME }}.app" \
-            --overwrite --out release
-
+          mkdir -p release
+          create-dmg \
+            --overwrite \
+            "release/${{ env.BINARY_NAME }}.dmg" \
+            "${{ env.BINARY_NAME }}.app"
       - name: Upload .app and .dmg
         uses: actions/upload-artifact@v4
         with:
@@ -243,3 +200,23 @@ jobs:
           path: |
             ${{ env.BINARY_NAME }}.app
             release/${{ env.BINARY_NAME }}.dmg
+
+  # Windows build
+  build-windows:
+    name: Build Windows (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          target: x86_64-pc-windows-msvc
+      - name: Build
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msvc
+          path: target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe
