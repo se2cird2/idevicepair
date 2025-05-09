@@ -5,10 +5,10 @@ on:
     branches: [ main ]
 
 env:
-  BINARY_NAME: pair
-  FLATPAK_ID: org.example.MyApp
-  APPIMAGE_ICON: icons/256x256.png
-  APPIMAGE_DESKTOP: myapp.desktop
+  BINARY_NAME: idevicepair
+  FLATPAK_ID: com.github.se2cird2.idevicepair
+  APPIMAGE_ICON: icons/idevicepair.png
+  APPIMAGE_DESKTOP: packaging/idevicepair.desktop
   
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ jobs:
           cat > ${FLATPAK_ID}.arm64.json <<EOF
           {
             "app-id": "${FLATPAK_ID}",
-            "runtime": "org.freedesktop.Platfor",
+            "runtime": "org.freedesktop.Platform",
             "runtime-version": "21.08",
             "sdk": "org.freedesktop.Sdk",
             "command": "${BINARY_NAME}",
