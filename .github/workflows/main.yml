@@ -149,10 +149,38 @@ jobs:
           name: macos-arm64
           path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
 
+  # Package macOS Universal Binary
+  package-macos-universal:
+    name: Create Universal macOS Binary
+    needs: build-macos-slices
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Download Intel slice
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-x64
+          path: slice-x64
+      - name: Download ARM64 slice
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-arm64
+          path: slice-arm64
+      - name: Create universal binary
+        run: |
+          mkdir -p release
+          lipo slice-x64/${{ env.BINARY_NAME }} slice-arm64/${{ env.BINARY_NAME }} \
+            -create -output release/${{ env.BINARY_NAME }}
+      - name: Upload universal artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: release/${{ env.BINARY_NAME }}
+
   # Package macOS .app & .dmg
   package-macos-bundle:
     name: Package macOS .app & .dmg
-    needs: build-macos-slices
+    needs: package-macos-universal
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
@@ -160,7 +188,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: macos-universal
-          path: ./release
+          path: release
       - name: Create .app Bundle
         run: |
           APP="${{ env.BINARY_NAME }}"
@@ -186,13 +214,13 @@ jobs:
         run: |
           sips -s format icns "${{ env.APPIMAGE_ICON }}" \
             --out "${{ env.BINARY_NAME }}.app/Contents/Resources/idevicepair.icns"
-      - name: Generate DMG with create-dmg
+      - name: Install create-dmg
+        run: brew install create-dmg
+      - name: Generate DMG
         run: |
+          APP="${{ env.BINARY_NAME }}"
           mkdir -p release
-          create-dmg \
-            --overwrite \
-            "release/${{ env.BINARY_NAME }}.dmg" \
-            "${{ env.BINARY_NAME }}.app"
+          create-dmg --overwrite "release/${APP}.dmg" "${APP}.app"
       - name: Upload .app and .dmg
         uses: actions/upload-artifact@v4
         with:
