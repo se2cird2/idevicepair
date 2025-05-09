@@ -5,12 +5,11 @@ on:
     branches: [ main ]
 
 env:
-  BINARY_NAME: pair
+  BINARY_NAME: iDevicePair
   VERSION: 1.0.0
   ICON_PNG: icons/idevicepair.png
 
 jobs:
-
   build-appimage:
     name: Build AppImage for ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
@@ -49,15 +48,15 @@ jobs:
           mkdir -p AppDir/usr/bin AppDir/usr/share/icons/hicolor/256x256/apps
           cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} AppDir/usr/bin/
           ICON_NAME=${ICON_PNG##*/}
-          ICON_BASENAME=${ICON_NAME%.*}
-          cp ${{ env.ICON_PNG }} AppDir/${ICON_BASENAME}.png
-          cp ${{ env.ICON_PNG }} AppDir/usr/share/icons/hicolor/256x256/apps/${ICON_BASENAME}.png
+          ICON_BASE=${ICON_NAME%.*}
+          cp ${{ env.ICON_PNG }} AppDir/${ICON_BASE}.png
+          cp ${{ env.ICON_PNG }} AppDir/usr/share/icons/hicolor/256x256/apps/${ICON_BASE}.png
           cat > AppDir/${{ env.BINARY_NAME }}.desktop <<EOF
           [Desktop Entry]
           Type=Application
           Name=iDevicePair
           Exec=${{ env.BINARY_NAME }} %u
-          Icon=${ICON_BASENAME}
+          Icon=${ICON_BASE}
           Categories=Utility;
           EOF
           ln -s usr/bin/${{ env.BINARY_NAME }} AppDir/AppRun
@@ -84,23 +83,20 @@ jobs:
             target: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v3
-
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
           target: ${{ matrix.target }}
-
       - name: Build slice ${{ matrix.arch }}
         run: |
-          cargo build --release --bin ${BINARY_NAME} --target ${{ matrix.target }}
-
-      - name: Upload slice artifacts
+          cargo build --release --bin ${{ env.BINARY_NAME }} --target ${{ matrix.target }}
+      - name: Upload slice
         uses: actions/upload-artifact@v4
         with:
           name: slice-${{ matrix.arch }}
-          path: target/${{ matrix.target }}/release/${BINARY_NAME}
+          path: target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}
 
   create-universal-app:
     name: Create Universal .app Bundle
@@ -108,58 +104,50 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
-
       - name: Download x86_64 slice
         uses: actions/download-artifact@v4
         with:
           name: slice-x86_64
           path: slice-x86_64
-
       - name: Download arm64 slice
         uses: actions/download-artifact@v4
         with:
           name: slice-arm64
           path: slice-arm64
-
       - name: Create universal binary
         run: |
           mkdir -p build
-          lipo slice-x86_64/${BINARY_NAME} slice-arm64/${BINARY_NAME} \
-            -create -output build/${BINARY_NAME}
-
-      - name: Bundle into .app
+          lipo slice-x86_64/${{ env.BINARY_NAME }} slice-arm64/${{ env.BINARY_NAME }} -create -output build/${{ env.BINARY_NAME }}
+      - name: Bundle .app
         run: |
-          APP=${BINARY_NAME}.app
+          APP=${{ env.BINARY_NAME }}.app
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-          cp build/${BINARY_NAME} "$APP/Contents/MacOS/${BINARY_NAME}"
-          chmod +x "$APP/Contents/MacOS/${BINARY_NAME}"
+          cp build/${{ env.BINARY_NAME }} "$APP/Contents/MacOS/${{ env.BINARY_NAME }}"
+          chmod +x "$APP/Contents/MacOS/${{ env.BINARY_NAME }}"
           cat > "$APP/Contents/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-            <key>CFBundleName</key><string>${BINARY_NAME}</string>
-            <key>CFBundleIdentifier</key><string>com.github.se2cird2.${BINARY_NAME}</string>
-            <key>CFBundleVersion</key><string>${VERSION}</string>
-            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-            <key>CFBundleExecutable</key><string>${BINARY_NAME}</string>
+            <key>CFBundleName</key><string>${{ env.BINARY_NAME }}</string>
+            <key>CFBundleIdentifier</key><string>com.github.se2cird2.${{ env.BINARY_NAME }}</string>
+            <key>CFBundleVersion</key><string>${{ env.VERSION }}</string>
+            <key>CFBundleShortVersionString</key><string>${{ env.VERSION }}</string>
+            <key>CFBundleExecutable</key><string>${{ env.BINARY_NAME }}</string>
             <key>CFBundleIconFile</key><string>idevicepair.icns</string>
           </dict>
           </plist>
           EOF
-          # Icon conversion
-          sips -s format icns "${ICON_PNG}" --out "$APP/Contents/Resources/idevicepair.icns"
-          # Remove quarantine attrs
+          sips -s format icns "${{ env.ICON_PNG }}" --out "$APP/Contents/Resources/idevicepair.icns"
           xattr -rc "$APP"
-
-      - name: Upload .app artifact
+      - name: Upload .app
         uses: actions/upload-artifact@v4
         with:
-          name: iDevicePair-${VERSION}.app
+          name: iDevicePair-${{ env.VERSION }}.app
           path: iDevicePair.app
 
   build-windows:
-    name: Build Windows (MSVC)
+    name: Build Windows Executable
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
@@ -169,10 +157,11 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
           target: x86_64-pc-windows-msvc
-      - name: Build
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
-      - name: Upload artifact
+      - name: Build executable
+        run: |
+          cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
+      - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: windows-msvc
+          name: iDevicePair-${{ env.VERSION }}.exe
           path: target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe
