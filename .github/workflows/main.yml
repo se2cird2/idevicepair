@@ -5,7 +5,7 @@ on:
     branches: [ main ]
 
 env:
-  BINARY_NAME: idevicepair
+  BINARY_NAME: pair
   FLATPAK_ID: com.github.se2cird2.idevicepair
   APPIMAGE_ICON: icons/idevicepair.png
   APPIMAGE_DESKTOP: packaging/idevicepair.desktop
