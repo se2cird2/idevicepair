@@ -132,6 +132,11 @@ jobs:
         run: |
           sudo apt update && sudo apt install -y flatpak-builder
 
+      - name: Install Flatpak runtime deps
+        run: |
+          sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y org.freedesktop.Sdk//21.08 org.freedesktop.Platform//21.08
+
       - name: Create manifest
         run: |
           cat > ${FLATPAK_ID}.arm64.json <<EOF
@@ -178,6 +183,19 @@ jobs:
           name: ${{ needs.build-linux-x64.outputs.artifact-name }}
           path: .
 
+      - name: Generate desktop file
+        run: |
+          mkdir -p packaging
+          cat > packaging/idevicepair.desktop <<EOF
+          [Desktop Entry]
+          Name=iDevice Pair
+          Exec=idevicepair
+          Icon=idevicepair
+          Type=Application
+          Categories=Utility;System;
+          X-Flatpak=com.github.se2cird2.idevicepair
+          EOF
+
       - name: Install AppImage tooling
         run: |
           sudo apt update && sudo apt install -y wget fuse libfuse2 patchelf
@@ -217,6 +235,19 @@ jobs:
         with:
           name: ${{ needs.build-linux-arm64.outputs.artifact-name }}
           path: .
+
+      - name: Generate desktop file
+        run: |
+          mkdir -p packaging
+          cat > packaging/idevicepair.desktop <<EOF
+          [Desktop Entry]
+          Name=iDevice Pair
+          Exec=idevicepair
+          Icon=idevicepair
+          Type=Application
+          Categories=Utility;System;
+          X-Flatpak=com.github.se2cird2.idevicepair
+          EOF
 
       - name: Install AppImage tooling
         run: |
@@ -280,66 +311,4 @@ jobs:
           name: macos-x64
           path: target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
 
-      - name: Upload ARM64 slice
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-arm64
-          path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
-
-  # ───────────────────────────────────────────────────────────────────────────
-  # macOS universal (depends on slices)
-  package-macos:
-    name: Package macOS Universal
-    needs: build-macos-slices
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Download Intel slice
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-x64
-          path: slice-x64
-
-      - name: Download ARM64 slice
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-arm64
-          path: slice-arm64
-
-      - name: Create universal binary
-        run: |
-          mkdir -p target/universal/release
-          lipo\
-            slice-x64/${{ env.BINARY_NAME }}\
-            slice-arm64/${{ env.BINARY_NAME }}\
-            -create -output target/universal/release/${{ env.BINARY_NAME }}
-      - name: Upload universal artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-universal
-          path: target/universal/release/${{ env.BINARY_NAME }}
-
-  # ───────────────────────────────────────────────────────────────────────────
-  # Windows MSVC (native)
-  build-windows:
-    name: Build Windows (MSVC)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: x86_64-pc-windows-msvc
-
-      - name: Build
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
-      
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-msvc
-          path: target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe
+      - name: Upload AR
