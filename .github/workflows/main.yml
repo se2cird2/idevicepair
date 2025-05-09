@@ -8,15 +8,11 @@ env:
   BINARY_NAME: pair
   FLATPAK_ID: com.github.se2cird2.idevicepair
   APPIMAGE_ICON: icons/idevicepair.png
-  APPIMAGE_DESKTOP: packaging/idevicepair.desktop
 
 jobs:
-  # Linux x86_64 build
   build-linux-x64:
     name: Build Linux x86_64
     runs-on: ubuntu-latest
-    outputs:
-      artifact-name: linux-x64
     steps:
       - uses: actions/checkout@v3
       - name: Set up Rust
@@ -26,19 +22,17 @@ jobs:
           components: rustfmt, clippy
           target: x86_64-unknown-linux-gnu
       - name: Build
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-unknown-linux-gnu
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} \
+             --target x86_64-unknown-linux-gnu
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-x64
           path: target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
-  # Linux ARM64 build
   build-linux-arm64:
     name: Build Linux ARM64
     runs-on: ubuntu-22.04-arm
-    outputs:
-      artifact-name: linux-arm64
     steps:
       - uses: actions/checkout@v3
       - name: Set up Rust
@@ -48,14 +42,14 @@ jobs:
           components: rustfmt, clippy
           target: aarch64-unknown-linux-gnu
       - name: Build
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-unknown-linux-gnu
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} \
+             --target aarch64-unknown-linux-gnu
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-arm64
           path: target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
-  # Flatpak bundles
   flatpak-build:
     name: Build Flatpak bundles
     runs-on: ubuntu-latest
@@ -69,52 +63,43 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v3
-      - name: Download x86_64 binary
-        if: matrix.arch == 'x86_64'
+      - name: Download binary
         uses: actions/download-artifact@v4
         with:
-          name: linux-x64
-          path: build-artifacts
-      - name: Download ARM64 binary
-        if: matrix.arch == 'aarch64'
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-arm64
+          name: linux-${{ matrix.arch == 'x86_64' && 'x64' || 'arm64' }}
           path: build-artifacts
       - name: Prepare binary
-        run: |
-          cp build-artifacts/${{ env.BINARY_NAME }} .
+        run: cp build-artifacts/${{ env.BINARY_NAME }} .
       - name: Create Flatpak manifest
         run: |
-          cat > ${{ env.FLATPAK_ID }}.json <<EOF
+          cat > ${FLATPAK_ID}.json <<EOF
           {
-            "app-id": "${{ env.FLATPAK_ID }}",
+            "app-id": "${FLATPAK_ID}",
             "runtime": "org.freedesktop.Platform",
             "runtime-version": "21.08",
             "sdk": "org.freedesktop.Sdk",
-            "command": "${{ env.BINARY_NAME }}",
+            "command": "${BINARY_NAME}",
             "modules": [{
-              "name": "${{ env.BINARY_NAME }}",
+              "name": "${BINARY_NAME}",
               "buildsystem": "simple",
               "build-commands": [
-                "install -Dm755 ${{ env.BINARY_NAME }} /app/bin/${{ env.BINARY_NAME }}"
+                "install -Dm755 ${BINARY_NAME} /app/bin/${BINARY_NAME}"
               ],
-              "sources": [{ "type": "file", "path": "${{ env.BINARY_NAME }}" }]
+              "sources": [{ "type": "file", "path": "${BINARY_NAME}" }]
             }]
           }
           EOF
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          manifest-path: ${{ env.FLATPAK_ID }}.json
-          bundle: ${{ env.FLATPAK_ID }}-${{ matrix.arch }}.flatpak
+          manifest-path: ${FLATPAK_ID}.json
+          bundle: ${FLATPAK_ID}-${{ matrix.arch }}.flatpak
       - name: Upload Flatpak bundle
         uses: actions/upload-artifact@v4
         with:
           name: flatpak-${{ matrix.arch }}
-          path: ${{ env.FLATPAK_ID }}-${{ matrix.arch }}.flatpak
+          path: ${FLATPAK_ID}-${{ matrix.arch }}.flatpak
 
-  # macOS universal binary slices
   build-macos-slices:
     name: Build macOS slices
     runs-on: macos-latest
@@ -129,7 +114,8 @@ jobs:
           components: rustfmt, clippy
           target: x86_64-apple-darwin
       - name: Build Intel slice
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-apple-darwin
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} \
+             --target x86_64-apple-darwin
       - name: Set up Rust (ARM64)
         uses: actions-rs/toolchain@v1
         with:
@@ -137,7 +123,8 @@ jobs:
           components: rustfmt, clippy
           target: aarch64-apple-darwin
       - name: Build ARM64 slice
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-apple-darwin
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} \
+             --target aarch64-apple-darwin
       - name: Upload Intel slice
         uses: actions/upload-artifact@v4
         with:
@@ -149,35 +136,29 @@ jobs:
           name: macos-arm64
           path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
 
-  # Package macOS Universal Binary
   package-macos-universal:
     name: Create Universal macOS Binary
     needs: build-macos-slices
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Download Intel slice
+      - name: Download slices
         uses: actions/download-artifact@v4
         with:
-          name: macos-x64
-          path: slice-x64
-      - name: Download ARM64 slice
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-arm64
-          path: slice-arm64
+          name: macos-x64,macos-arm64
+          path: slice
       - name: Create universal binary
         run: |
           mkdir -p release
-          lipo slice-x64/${{ env.BINARY_NAME }} slice-arm64/${{ env.BINARY_NAME }} \
-            -create -output release/${{ env.BINARY_NAME }}
+          lipo slice/x86_64-apple-darwin/release/${BINARY_NAME} \
+               slice/aarch64-apple-darwin/release/${BINARY_NAME} \
+               -create -output release/${BINARY_NAME}
       - name: Upload universal artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-universal
           path: release/${{ env.BINARY_NAME }}
 
-  # Package macOS .app & .dmg
   package-macos-bundle:
     name: Package macOS .app & .dmg
     needs: package-macos-universal
@@ -193,16 +174,17 @@ jobs:
         run: |
           APP="${{ env.BINARY_NAME }}"
           VERSION="1.0.0"
-          mkdir -p "${APP}.app/Contents/MacOS" "${APP}.app/Contents/Resources"
+          mkdir -p "${APP}.app/Contents/MacOS" \
+                   "${APP}.app/Contents/Resources"
           cp release/${APP} "${APP}.app/Contents/MacOS/${APP}"
           cat > "${APP}.app/Contents/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"  
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
             "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
             <dict>
               <key>CFBundleName</key><string>${APP}</string>
-              <key>CFBundleIdentifier</key><string>${{ env.FLATPAK_ID }}</string>
+              <key>CFBundleIdentifier</key><string>${FLATPAK_ID}</string>
               <key>CFBundleVersion</key><string>${VERSION}</string>
               <key>CFBundlePackageType</key><string>APPL</string>
               <key>CFBundleExecutable</key><string>${APP}</string>
@@ -215,12 +197,17 @@ jobs:
           sips -s format icns "${{ env.APPIMAGE_ICON }}" \
             --out "${{ env.BINARY_NAME }}.app/Contents/Resources/idevicepair.icns"
       - name: Install create-dmg
-        run: brew install create-dmg
+        run: brew install create-dmg               # Homebrew install :contentReference[oaicite:8]{index=8}
       - name: Generate DMG
         run: |
           APP="${{ env.BINARY_NAME }}"
           mkdir -p release
-          create-dmg --overwrite "release/${APP}.dmg" "${APP}.app"
+          test -f release/${APP}.dmg && rm release/${APP}.dmg   # from README example :contentReference[oaicite:9]{index=9}
+          create-dmg \
+            --volname "${APP}"                                  # supported option :contentReference[oaicite:10]{index=10}
+            --format UDZO                                       # default compression :contentReference[oaicite:11]{index=11}
+            "release/${APP}.dmg" \
+            "${APP}.app"
       - name: Upload .app and .dmg
         uses: actions/upload-artifact@v4
         with:
@@ -229,7 +216,6 @@ jobs:
             ${{ env.BINARY_NAME }}.app
             release/${{ env.BINARY_NAME }}.dmg
 
-  # Windows build
   build-windows:
     name: Build Windows (MSVC)
     runs-on: windows-latest
@@ -242,7 +228,8 @@ jobs:
           components: rustfmt, clippy
           target: x86_64-pc-windows-msvc
       - name: Build
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} \
+             --target x86_64-pc-windows-msvc
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
