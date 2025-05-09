@@ -1,4 +1,4 @@
-name: CI
+name: pair_gui build
 
 on:
   push:
@@ -201,7 +201,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: appimage-x64
-          path: *.AppImage
+          path: "*.AppImage"
 
   # ───────────────────────────────────────────────────────────────────────────
   # AppImage ARM64
@@ -241,7 +241,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: appimage-arm64
-          path: *.AppImage
+          path: "*.AppImage"
 
   # ───────────────────────────────────────────────────────────────────────────
   # macOS slices (Intel + ARM)
@@ -310,9 +310,9 @@ jobs:
       - name: Create universal binary
         run: |
           mkdir -p target/universal/release
-          lipo \
-            slice-x64/${{ env.BINARY_NAME }} \
-            slice-arm64/${{ env.BINARY_NAME }} \
+          lipo\
+            slice-x64/${{ env.BINARY_NAME }}\
+            slice-arm64/${{ env.BINARY_NAME }}\
             -create -output target/universal/release/${{ env.BINARY_NAME }}
       - name: Upload universal artifact
         uses: actions/upload-artifact@v4
