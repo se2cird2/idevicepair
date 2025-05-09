@@ -27,8 +27,7 @@ jobs:
             toolfile: appimagetool-aarch64.AppImage
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -56,23 +55,26 @@ jobs:
 
       - name: Prepare AppDir
         run: |
-          # create directories
           mkdir -p AppDir/usr/bin \
                    AppDir/usr/share/icons/hicolor/256x256/apps
 
-          # copy the binary
+          # Copy the binary
           cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} \
              AppDir/usr/bin/
 
-          # derive icon name and basename
+          # Derive icon names
           ICON_NAME=${ICON_PNG##*/}           # e.g. idevicepair.png
           ICON_BASENAME=${ICON_NAME%.*}      # e.g. idevicepair
 
-          # install the icon into the hicolor theme
+          # -----------------------
+          # 1) CORE FIX: copy icon into AppDir root
+          cp ${{ env.ICON_PNG }} AppDir/${ICON_BASENAME}.png
+
+          # 2) also copy into theme path for runtime
           cp ${{ env.ICON_PNG }} \
              AppDir/usr/share/icons/hicolor/256x256/apps/${ICON_BASENAME}.png
 
-          # write the .desktop file at the root of AppDir so appimagetool sees it
+          # 3) Write the desktop file at the root (so appimagetool sees it)
           cat > AppDir/${{ env.BINARY_NAME }}.desktop <<EOF
           [Desktop Entry]
           Type=Application
@@ -82,7 +84,7 @@ jobs:
           Categories=Utility;
           EOF
 
-          # make the AppRun symlink so the runtime invokes your binary
+          # 4) Symlink AppRun to your binary
           ln -s usr/bin/${{ env.BINARY_NAME }} AppDir/AppRun
           chmod +x AppDir/AppRun
 
