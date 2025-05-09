@@ -66,30 +66,21 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v3
-
-      # Download the appropriate Rust-built binary artifact
       - name: Download x86_64 binary
         if: matrix.arch == 'x86_64'
         uses: actions/download-artifact@v4
         with:
           name: linux-x64
           path: build-artifacts
-
       - name: Download ARM64 binary
         if: matrix.arch == 'aarch64'
         uses: actions/download-artifact@v4
         with:
           name: linux-arm64
           path: build-artifacts
-
       - name: Prepare binary
         run: |
-          if [ "${{ matrix.arch }}" = "x86_64" ]; then
-            cp build-artifacts/${{ env.BINARY_NAME }} .
-          else
-            cp build-artifacts/${{ env.BINARY_NAME }} .
-          fi
-
+          cp build-artifacts/${{ env.BINARY_NAME }} .
       - name: Create Flatpak manifest
         run: |
           cat > ${{ env.FLATPAK_ID }}.json <<EOF
@@ -103,19 +94,17 @@ jobs:
               "name": "${{ env.BINARY_NAME }}",
               "buildsystem": "simple",
               "build-commands": [
-                "install -Dm755 ${{ env.BINARY_NAME }} ${FLATPAK_DEST}/bin/${{ env.BINARY_NAME }}"
+                "install -Dm755 ${{ env.BINARY_NAME }} /app/bin/${{ env.BINARY_NAME }}"
               ],
               "sources": [{ "type": "file", "path": "${{ env.BINARY_NAME }}" }]
             }]
           }
           EOF
-
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           manifest-path: ${{ env.FLATPAK_ID }}.json
           bundle: ${{ env.FLATPAK_ID }}-${{ matrix.arch }}.flatpak
-
       - name: Upload Flatpak bundle
         uses: actions/upload-artifact@v4
         with:
@@ -154,12 +143,12 @@ jobs:
       - name: Create AppDir
         run: |
           mkdir -p AppDir/usr/bin
-          install -Dm755 ${BINARY_NAME} AppDir/usr/bin/${BINARY_NAME}
-          install -Dm644 ${APPIMAGE_DESKTOP} AppDir/${APPIMAGE_DESKTOP}
-          install -Dm644 ${APPIMAGE_ICON} AppDir/${APPIMAGE_ICON}
+          install -Dm755 ${{ env.BINARY_NAME }} AppDir/usr/bin/${{ env.BINARY_NAME }}
+          install -Dm644 ${{ env.APPIMAGE_DESKTOP }} AppDir/${{ env.APPIMAGE_DESKTOP }}
+          install -Dm644 ${{ env.APPIMAGE_ICON }} AppDir/${{ env.APPIMAGE_ICON }}
       - name: Build AppImage
         run: |
-          ./linuxdeploy-x86_64.AppImage --appdir AppDir --desktop-file ${APPIMAGE_DESKTOP} --icon-file ${APPIMAGE_ICON} --output dir
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --desktop-file ${{ env.APPIMAGE_DESKTOP }} --icon-file ${{ env.APPIMAGE_ICON }} --output dir
           ./linuxdeploy-plugin-appimage-x86_64.AppImage --appdir AppDir --output appimage
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
@@ -199,12 +188,12 @@ jobs:
       - name: Create AppDir
         run: |
           mkdir -p AppDir/usr/bin
-          install -Dm755 ${BINARY_NAME} AppDir/usr/bin/${BINARY_NAME}
-          install -Dm644 ${APPIMAGE_DESKTOP} AppDir/${APPIMAGE_DESKTOP}
-          install -Dm644 ${APPIMAGE_ICON} AppDir/${APPIMAGE_ICON}
+          install -Dm755 ${{ env.BINARY_NAME }} AppDir/usr/bin/${{ env.BINARY_NAME }}
+          install -Dm644 ${{ env.APPIMAGE_DESKTOP }} AppDir/${{ env.APPIMAGE_DESKTOP }}
+          install -Dm644 ${{ env.APPIMAGE_ICON }} AppDir/${{ env.APPIMAGE_ICON }}
       - name: Build AppImage
         run: |
-          ./linuxdeploy-aarch64.AppImage --appdir AppDir --desktop-file ${APPIMAGE_DESKTOP} --icon-file ${APPIMAGE_ICON} --output dir
+          ./linuxdeploy-aarch64.AppImage --appdir AppDir --desktop-file ${{ env.APPIMAGE_DESKTOP }} --icon-file ${{ env.APPIMAGE_ICON }} --output dir
           ./linuxdeploy-plugin-appimage-aarch64.AppImage --appdir AppDir --output appimage
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
