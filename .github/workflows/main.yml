@@ -27,8 +27,7 @@ jobs:
             toolfile: appimagetool-aarch64.AppImage
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -37,12 +36,12 @@ jobs:
           components: rustfmt, clippy
           target: ${{ matrix.target }}
 
-      - name: Install FUSE & AppStream
+      - name: Install FUSE
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfuse2 appstream
+          sudo apt-get install -y libfuse2
 
-      - name: Build native binary
+      - name: Build Rust binary
         run: |
           cargo build --release --bin ${{ env.BINARY_NAME }} \
             --target ${{ matrix.target }}
@@ -55,30 +54,38 @@ jobs:
 
       - name: Prepare AppDir
         run: |
-          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/bin \
+                   AppDir/usr/share/applications \
+                   AppDir/usr/share/icons/hicolor/256x256/apps
+
+          # Copy the binary
           cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} AppDir/usr/bin/
 
+          # Derive icon basename
           ICON_NAME=${ICON_PNG##*/}
           ICON_BASENAME=${ICON_NAME%.*}
 
-          # Copy the icon and produce a desktop file that omits the extension
-          cp ${{ env.ICON_PNG }} AppDir/$ICON_NAME
-          cat > AppDir/${{ env.BINARY_NAME }}.desktop <<EOF
+          # Install icon
+          cp ${{ env.ICON_PNG }} AppDir/usr/share/icons/hicolor/256x256/apps/${ICON_BASENAME}.png
+
+          # Create desktop entry
+          cat > AppDir/usr/share/applications/${{ env.BINARY_NAME }}.desktop <<EOF
           [Desktop Entry]
           Type=Application
           Name=iDevicePair
-          Exec=${{ env.BINARY_NAME }}
-          Icon=$ICON_BASENAME
+          Exec=${{ env.BINARY_NAME }} %u
+          Icon=${ICON_BASENAME}
           Categories=Utility;
           EOF
 
-          # Place the PNG in the hicolor theme for lookup
-          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
-          cp ${{ env.ICON_PNG }} AppDir/usr/share/icons/hicolor/256x256/apps/${ICON_BASENAME}.png
+          # Create AppRun symlink
+          ln -s usr/bin/${{ env.BINARY_NAME }} AppDir/AppRun
+          chmod +x AppDir/AppRun
 
       - name: Build AppImage
         run: |
-          ./appimagetool.AppImage AppDir iDevicePair-${{ env.VERSION }}-${{ matrix.arch }}.AppImage
+          ./appimagetool.AppImage AppDir \
+            iDevicePair-${{ env.VERSION }}-${{ matrix.arch }}.AppImage
 
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
