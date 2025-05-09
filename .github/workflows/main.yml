@@ -136,16 +136,13 @@ jobs:
         run: |
           cat > AppImageBuilder.yml <<EOF
           version: 1
+          app_info:
+            id: ${{ env.FLATPAK_ID }}
+            name: iDevice Pair
+            icon: idevicepair
+            exec: idevicepair
           AppDir:
             path: AppDir
-          Recipe:
-            app_info:
-              id: ${FLATPAK_ID}
-              name: iDevice Pair
-              icon: idevicepair
-              exec: idevicepair
-            update_info:
-              providers: []
           EOF
       - name: Build AppImage
         uses: AppImageCrafters/build-appimage@master
