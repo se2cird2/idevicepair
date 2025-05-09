@@ -111,96 +111,51 @@ jobs:
           name: flatpak-${{ matrix.arch }}
           path: ${{ env.FLATPAK_ID }}-${{ matrix.arch }}.flatpak
 
-  package-appimage:
-    name: Package AppImage (x86_64)
+    build-appimages:
+    name: Build AppImages
     runs-on: ubuntu-latest
-    needs: build-linux-x64
+    needs: [build-linux-x64, build-linux-arm64]
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v3
-      - name: Download binary
+      - name: Download binary (x86_64)
+        if: matrix.arch == 'x86_64'
         uses: actions/download-artifact@v4
         with:
           name: linux-x64
-          path: .
-      - name: Generate desktop file
-        run: |
-          mkdir -p packaging
-          cat > packaging/idevicepair.desktop <<EOF
-          [Desktop Entry]
-          Name=iDevice Pair
-          Exec=idevicepair
-          Icon=idevicepair
-          Type=Application
-          Categories=Utility;System;
-          X-Flatpak=com.github.se2cird2.idevicepair
-          EOF
-      - name: Install AppImage tooling
-        run: |
-          sudo apt update && sudo apt install -y wget fuse libfuse2 patchelf
-          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          wget https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage
-          chmod +x linuxdeploy-*.AppImage
-      - name: Create AppDir
-        run: |
-          mkdir -p AppDir/usr/bin
-          install -Dm755 ${{ env.BINARY_NAME }} AppDir/usr/bin/${{ env.BINARY_NAME }}
-          install -Dm644 ${{ env.APPIMAGE_DESKTOP }} AppDir/${{ env.APPIMAGE_DESKTOP }}
-          install -Dm644 ${{ env.APPIMAGE_ICON }} AppDir/${{ env.APPIMAGE_ICON }}
-      - name: Build AppImage
-        run: |
-          ./linuxdeploy-x86_64.AppImage --appdir AppDir --desktop-file ${{ env.APPIMAGE_DESKTOP }} --icon-file ${{ env.APPIMAGE_ICON }} --output dir
-          ./linuxdeploy-plugin-appimage-x86_64.AppImage --appdir AppDir --output appimage
-      - name: Upload AppImage
-        uses: actions/upload-artifact@v4
-        with:
-          name: appimage-x64
-          path: "*.AppImage"
-
-  package-appimage-arm64:
-    name: Package AppImage (ARM64)
-    runs-on: ubuntu-22.04-arm
-    needs: build-linux-arm64
-    steps:
-      - uses: actions/checkout@v3
-      - name: Download binary
+          path: AppDir/usr/bin
+      - name: Download binary (ARM64)
+        if: matrix.arch == 'aarch64'
         uses: actions/download-artifact@v4
         with:
           name: linux-arm64
-          path: .
-      - name: Generate desktop file
+          path: AppDir/usr/bin
+      - name: Create AppImageBuilder recipe
         run: |
-          mkdir -p packaging
-          cat > packaging/idevicepair.desktop <<EOF
-          [Desktop Entry]
-          Name=iDevice Pair
-          Exec=idevicepair
-          Icon=idevicepair
-          Type=Application
-          Categories=Utility;System;
-          X-Flatpak=com.github.se2cird2.idevicepair
+          cat > AppImageBuilder.yml <<EOF
+          version: 1
+          AppDir:
+            path: AppDir
+          Recipe:
+            app_info:
+              id: ${FLATPAK_ID}
+              name: iDevice Pair
+              icon: idevicepair
+              exec: idevicepair
+            update_info:
+              providers: []
           EOF
-      - name: Install AppImage tooling
-        run: |
-          sudo apt update && sudo apt install -y wget fuse libfuse2 patchelf
-          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
-          wget https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-aarch64.AppImage
-          chmod +x linuxdeploy-*.AppImage
-      - name: Create AppDir
-        run: |
-          mkdir -p AppDir/usr/bin
-          install -Dm755 ${{ env.BINARY_NAME }} AppDir/usr/bin/${{ env.BINARY_NAME }}
-          install -Dm644 ${{ env.APPIMAGE_DESKTOP }} AppDir/${{ env.APPIMAGE_DESKTOP }}
-          install -Dm644 ${{ env.APPIMAGE_ICON }} AppDir/${{ env.APPIMAGE_ICON }}
       - name: Build AppImage
-        run: |
-          ./linuxdeploy-aarch64.AppImage --appdir AppDir --desktop-file ${{ env.APPIMAGE_DESKTOP }} --icon-file ${{ env.APPIMAGE_ICON }} --output dir
-          ./linuxdeploy-plugin-appimage-aarch64.AppImage --appdir AppDir --output appimage
+        uses: AppImageCrafters/build-appimage@master
+        with:
+          recipe: AppImageBuilder.yml
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: appimage-arm64
+          name: appimage-${{ matrix.arch }}
           path: "*.AppImage"
-
   build-macos-slices:
     name: Build macOS slices
     runs-on: macos-latest
