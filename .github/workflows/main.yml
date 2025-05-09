@@ -1,4 +1,3 @@
-# .github/workflows/build-appimage.yml
 name: Linux Build & AppImage
 
 on:
@@ -9,7 +8,7 @@ on:
 
 env:
   BINARY_NAME: pair
-  APPIMAGE_RECIPE: AppImageBuilder.yml
+  RECIPE: AppImageBuilder.yml
 
 jobs:
   build-appimage:
@@ -17,49 +16,62 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1) Fetch the code
+      # 1) Checkout source
       - uses: actions/checkout@v3
 
-      # 2) Install Rust toolchain and build release
+      # 2) Set up Rust and build release binary
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-          components: rustfmt, clippy
 
       - name: Build release binary
         run: cargo build --release --bin ${{ env.BINARY_NAME }}
 
-      # 3) Prepare AppDir layout
-      - name: Create AppDir
+      # 3) Stage AppDir
+      - name: Prepare AppDir
         run: |
-          mkdir -p AppDir/usr/bin
+          # create AppDir hierarchy
+          mkdir -p AppDir/usr/bin \
+                   AppDir/usr/share/applications \
+                   AppDir/usr/share/icons/hicolor/256x256/apps
+
+          # copy binary
           cp target/release/${{ env.BINARY_NAME }} AppDir/usr/bin/
 
-          # Copy your icon and desktop file into AppDir
-          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
-          cp icons/idevicepair.png AppDir/usr/share/icons/hicolor/256x256/apps/${{ env.BINARY_NAME }}.png
+          # generate desktop file
+          cat > AppDir/usr/share/applications/${{ env.BINARY_NAME }}.desktop <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=Pair
+          Exec=${{ env.BINARY_NAME }}
+          Icon=idevicepair
+          Categories=Utility;
+          Terminal=false
+          EOF
 
-          mkdir -p AppDir/usr/share/applications
-          cp packaging/idevicepair.desktop AppDir/usr/share/applications/
+          # copy icon
+          cp icons/idevicepair.png \
+             AppDir/usr/share/icons/hicolor/256x256/apps/idevicepair.png
 
-      # 4) Install any native deps your recipe needs (optional)
-      - name: Install build dependencies
+      # 4) (Optional) Install extra deps for recipe
+      - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfuse2  # example: FUSE support
+          sudo apt-get install -y libfuse2
 
-      # 5) Build the AppImage using the official action
+      # 5) Build .AppImage using the official action
       - name: Build AppImage
         uses: AppImageCrafters/build-appimage-action@master
         with:
-          recipe: ${{ env.APPIMAGE_RECIPE }}
+          recipe: ${{ env.RECIPE }}
         env:
-          # Optional: enable auto-update metadata
+          # enable auto‐update metadata via GitHub Releases
           UPDATE_INFO: gh-releases-zsync|${{ github.repository_owner }}|${{ github.event.repository.name }}|latest|*.AppImage.zsync
 
-      # 6) Upload the AppImage and zsync file
-      - uses: actions/upload-artifact@v4
+      # 6) Upload artifacts
+      - name: Upload AppImage artifacts
+        uses: actions/upload-artifact@v4
         with:
           name: AppImage
           path: |
