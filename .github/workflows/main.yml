@@ -4,6 +4,11 @@ on:
   push:
     branches: [ main ]
 
+env:
+  BINARY_NAME: pair
+  VERSION: 1.0.0
+  ICON_PNG: icons/idevicepair.png
+
 jobs:
   build-linux:
     name: Build AppImage (x86_64 & ARM64)
@@ -27,13 +32,12 @@ jobs:
           cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-unknown-linux-gnu
           cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-unknown-linux-gnu
 
-      - name: Generate AppImage with AppImage Builder
-        uses: appimage-builder/appimage-builder-action@master
+      - name: Build AppImages
+        uses: AppImageCrafters/build-appimage-action@v1
         with:
-          appimage-builder-version: latest
-          args: "--architecture x86_64,aarch64"
+          recipe: .github/appimage-builder.yml
         env:
-          APPIMAGE_BUILDER_CONFIG: ".github/appimage-builder.yml"
+          UPDATE_INFO: gh-releases-zsync|${{ github.repository_owner }}|${{ github.event.repository.name }}|latest|*.AppImage.zsync
 
       - name: Upload AppImages
         uses: actions/upload-artifact@v4
@@ -41,3 +45,38 @@ jobs:
           name: appimages
           path: |
             ./out/*.AppImage
+```
+
+```yaml
+# .github/appimage-builder.yml
+app: idevicepair
+version: 1.0.0
+
+sources:
+  - type: dir
+    path: target/x86_64-unknown-linux-gnu/release
+    include:
+      - pair
+  - type: dir
+    path: target/aarch64-unknown-linux-gnu/release
+    include:
+      - pair
+
+appdir:
+  path: AppDir
+
+# Icon name in desktop entry (no extension)
+icon: idevicepair
+
+desktop:
+  Name: iDevicePair
+  Exec: pair
+  Icon: idevicepair
+  Categories:
+    - Utility
+
+# Copy the application icon into AppDir/usr/share/icons
+files:
+  - source: ${{ env.ICON_PNG }}
+    destination: usr/share/icons/hicolor/256x256/apps/idevicepair.png
+
