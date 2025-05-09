@@ -1,281 +1,113 @@
-name: pair_gui build
+name: idevicepair gui build
 
 on:
   push:
     branches: [ main ]
 
 env:
-  BINARY_NAME: idevicepair
-  FLATPAK_ID: com.github.se2cird2.idevicepair
-  APPIMAGE_ICON: icons/idevicepair.png
-  APPIMAGE_DESKTOP: packaging/idevicepair.desktop
+  BINARY_NAME: pair
+  VERSION: 1.0.0
+  ICON_PNG: icons/idevicepair.png
 
 jobs:
+  # Linux x86_64 (native build + AppImage)
   build-linux-x64:
-    name: Build Linux x86_64
+    name: Build Linux x86_64 & AppImage
     runs-on: ubuntu-latest
-    outputs:
-      artifact-name: linux-x64
     steps:
       - uses: actions/checkout@v3
+
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
           target: x86_64-unknown-linux-gnu
-      - name: Build
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-unknown-linux-gnu
-      - name: Upload artifact
+
+      - name: Build native binary
+        run: |
+          cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-unknown-linux-gnu
+
+      - name: Download appimagetool (x86_64)
+        run: |
+          wget -c https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool.AppImage
+          chmod +x appimagetool.AppImage
+
+      - name: Prepare AppDir for x86_64
+        run: |
+          mkdir -p AppDir/usr/bin
+          cp target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} AppDir/usr/bin/
+          # extract icon filename
+          ICON_FILE=${ICON_PNG##*/}
+          cp ${{ env.ICON_PNG }} AppDir/$ICON_FILE
+          # desktop entry
+          cat > AppDir/${{ env.BINARY_NAME }}.desktop <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=iDevicePair
+          Exec=${{ env.BINARY_NAME }}
+          Icon=$ICON_FILE
+          Categories=Utility;
+          EOF
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          cp ${{ env.ICON_PNG }} AppDir/usr/share/icons/hicolor/256x256/apps/idevicepair.png
+
+      - name: Build x86_64 AppImage
+        run: |
+          ./appimagetool.AppImage AppDir iDevicePair-${{ env.VERSION }}-x86_64.AppImage
+
+      - name: Upload x86_64 AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: linux-x64
-          path: target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
+          name: linux-x64-appimage
+          path: iDevicePair-${{ env.VERSION }}-x86_64.AppImage
 
+  # Linux ARM64 (native build + AppImage)
   build-linux-arm64:
-    name: Build Linux ARM64
+    name: Build Linux ARM64 & AppImage
     runs-on: ubuntu-22.04-arm
-    outputs:
-      artifact-name: linux-arm64
     steps:
       - uses: actions/checkout@v3
+
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
           target: aarch64-unknown-linux-gnu
-      - name: Build
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-unknown-linux-gnu
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-arm64
-          path: target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
-  flatpak-build:
-    name: Build Flatpak bundles
-    runs-on: ubuntu-latest
-    needs: [build-linux-x64, build-linux-arm64]
-    container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
-      options: --privileged
-    strategy:
-      matrix:
-        arch: [x86_64, aarch64]
-      fail-fast: false
-    steps:
-      - uses: actions/checkout@v3
-      - name: Download x86_64 binary
-        if: matrix.arch == 'x86_64'
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-x64
-          path: build-artifacts
-      - name: Download ARM64 binary
-        if: matrix.arch == 'aarch64'
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-arm64
-          path: build-artifacts
-      - name: Prepare binary
+      - name: Build native binary
         run: |
-          cp build-artifacts/${{ env.BINARY_NAME }} .
-      - name: Create Flatpak manifest
+          cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-unknown-linux-gnu
+
+      - name: Download appimagetool (ARM64)
         run: |
-          cat > ${{ env.FLATPAK_ID }}.json <<EOF
-          {
-            "app-id": "${{ env.FLATPAK_ID }}",
-            "runtime": "org.freedesktop.Platform",
-            "runtime-version": "21.08",
-            "sdk": "org.freedesktop.Sdk",
-            "command": "${{ env.BINARY_NAME }}",
-            "modules": [{
-              "name": "${{ env.BINARY_NAME }}",
-              "buildsystem": "simple",
-              "build-commands": [
-                "install -Dm755 ${{ env.BINARY_NAME }} /app/bin/${{ env.BINARY_NAME }}"
-              ],
-              "sources": [{ "type": "file", "path": "${{ env.BINARY_NAME }}" }]
-            }]
-          }
+          wget -c https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage -O appimagetool.AppImage
+          chmod +x appimagetool.AppImage
+
+      - name: Prepare AppDir for ARM64
+        run: |
+          mkdir -p AppDir/usr/bin
+          cp target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} AppDir/usr/bin/
+          ICON_FILE=${ICON_PNG##*/}
+          cp ${{ env.ICON_PNG }} AppDir/$ICON_FILE
+          cat > AppDir/${{ env.BINARY_NAME }}.desktop <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=iDevicePair
+          Exec=${{ env.BINARY_NAME }}
+          Icon=$ICON_FILE
+          Categories=Utility;
           EOF
-      - name: Build Flatpak
-        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
-        with:
-          manifest-path: ${{ env.FLATPAK_ID }}.json
-          bundle: ${{ env.FLATPAK_ID }}-${{ matrix.arch }}.flatpak
-      - name: Upload Flatpak bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: flatpak-${{ matrix.arch }}
-          path: ${{ env.FLATPAK_ID }}-${{ matrix.arch }}.flatpak
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          cp ${{ env.ICON_PNG }} AppDir/usr/share/icons/hicolor/256x256/apps/idevicepair.png
 
-  build-appimages:
-    name: Build AppImages
-    runs-on: ubuntu-latest
-    needs: [build-linux-x64, build-linux-arm64]
-    strategy:
-      matrix:
-        arch: [x86_64, aarch64]
-    steps:
-      - uses: actions/checkout@v3
-      - name: Download binary (x86_64)
-        if: matrix.arch == 'x86_64'
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-x64
-          path: AppDir/usr/bin
-      - name: Download binary (ARM64)
-        if: matrix.arch == 'aarch64'
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-arm64
-          path: AppDir/usr/bin
-      - name: Create AppDir
-        run: mkdir -p AppDir/usr/bin
-      - name: Create AppImageBuilder recipe
+      - name: Build ARM64 AppImage
         run: |
-          cat > AppImageBuilder.yml << 'EOF'
-          version: 1
-          app_info:
-            id: ${{ env.FLATPAK_ID }}
-            name: iDevice Pair
-            icon: idevicepair
-            exec: idevicepair
-          AppDir:
-            path: AppDir
-          EOF
-      - name: List workspace
-        run: ls -Rla .
-      - name: Build AppImage
-        uses: AppImageCrafters/build-appimage@master
-        with:
-          recipe: './AppImageBuilder.yml'
-      - name: Upload AppImage
-        uses: actions/upload-artifact@v4
-        with:
-          name: appimage-${{ matrix.arch }}
-          path: '*.AppImage'
-      - uses: actions/checkout@v3
-      - name: Download binary (x86_64)
-        if: matrix.arch == 'x86_64'
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-x64
-          path: AppDir/usr/bin
-      - name: Download binary (ARM64)
-        if: matrix.arch == 'aarch64'
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-arm64
-          path: AppDir/usr/bin
-      - name: Create AppImageBuilder recipe
-        run: |
-          cat > AppImageBuilder.yml <<EOF
-          version: 1
-          AppDir:
-            path: AppDir
-            app_info:
-              id: ${{ env.FLATPAK_ID }}
-              name: iDevice Pair
-              icon: idevicepair
-              exec: usr/bin/idevicepair
-          EOF
-          version: 1
-          app_info:
-            id: ${{ env.FLATPAK_ID }}
-            name: iDevice Pair
-            icon: idevicepair
-            exec: idevicepair
-          AppDir:
-            path: AppDir
-          EOF
-      - name: Build AppImage
-        uses: AppImageCrafters/build-appimage@master
-        with:
-          recipe: AppImageBuilder.yml
-      - name: Upload AppImage
-        uses: actions/upload-artifact@v4
-        with:
-          name: appimage-${{ matrix.arch }}
-          path: "*.AppImage"
+          ./appimagetool.AppImage AppDir iDevicePair-${{ env.VERSION }}-aarch64.AppImage
 
-  build-macos-slices:
-    name: Build macOS slices
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Uninstall Homebrew rustup
-        run: brew uninstall rustup rustup-init || true
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: x86_64-apple-darwin
-      - name: Build Intel slice
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-apple-darwin
-      - name: Set up Rust for ARM64
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: aarch64-apple-darwin
-      - name: Build ARM64 slice
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-apple-darwin
-      - name: Upload Intel slice
+      - name: Upload ARM64 AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: macos-x64
-          path: target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
-      - name: Upload ARM64 slice
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-arm64
-          path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
-
-  package-macos:
-    name: Package macOS Universal
-    needs: build-macos-slices
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Download Intel slice
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-x64
-          path: slice-x64
-      - name: Download ARM64 slice
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-arm64
-          path: slice-arm64
-      - name: Create universal binary
-        run: |
-          mkdir -p target/universal/release
-          lipo slice-x64/${{ env.BINARY_NAME }} slice-arm64/${{ env.BINARY_NAME }} -create -output target/universal/release/${{ env.BINARY_NAME }}
-      - name: Upload universal artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-universal
-          path: target/universal/release/${{ env.BINARY_NAME }}
-
-  build-windows:
-    name: Build Windows (MSVC)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: x86_64-pc-windows-msvc
-      - name: Build
-        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-msvc
-          path: target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe
+          name: linux-arm64-appimage
+          path: iDevicePair-${{ env.VERSION }}-aarch64.AppImage
