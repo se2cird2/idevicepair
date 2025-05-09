@@ -1,9 +1,8 @@
-# .github/workflows/main.yml
-name: idevicepair gui build
+name: iDevicePair Builds
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
 
 env:
   BINARY_NAME: pair
@@ -11,6 +10,7 @@ env:
   ICON_PNG: icons/idevicepair.png
 
 jobs:
+  # Linux: Build AppImage for x86_64 and aarch64
   build-appimage:
     name: Build AppImage for ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
@@ -25,56 +25,33 @@ jobs:
             runner: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             toolfile: appimagetool-aarch64.AppImage
-
     steps:
       - uses: actions/checkout@v3
-
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
           target: ${{ matrix.target }}
-
       - name: Install FUSE & AppStream
         run: |
           sudo apt-get update
           sudo apt-get install -y libfuse2 appstream
-
       - name: Build native binary
         run: |
-          cargo build --release --bin ${{ env.BINARY_NAME }} \
-            --target ${{ matrix.target }}
-
+          cargo build --release --bin ${{ env.BINARY_NAME }} --target ${{ matrix.target }}
       - name: Download appimagetool
         run: |
-          wget -c \
-            https://github.com/AppImage/AppImageKit/releases/download/continuous/${{ matrix.toolfile }} \
-            -O appimagetool.AppImage
+          wget -c https://github.com/AppImage/AppImageKit/releases/download/continuous/${{ matrix.toolfile }} -O appimagetool.AppImage
           chmod +x appimagetool.AppImage
-
       - name: Prepare AppDir
         run: |
-          mkdir -p AppDir/usr/bin \
-                   AppDir/usr/share/icons/hicolor/256x256/apps
-
-          # Copy the binary
-          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} \
-             AppDir/usr/bin/
-
-          # Derive icon names
-          ICON_NAME=${ICON_PNG##*/}           # e.g. idevicepair.png
-          ICON_BASENAME=${ICON_NAME%.*}      # e.g. idevicepair
-
-          # -----------------------
-          # 1) CORE FIX: copy icon into AppDir root
+          mkdir -p AppDir/usr/bin AppDir/usr/share/icons/hicolor/256x256/apps
+          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} AppDir/usr/bin/
+          ICON_NAME=${ICON_PNG##*/}
+          ICON_BASENAME=${ICON_NAME%.*}
           cp ${{ env.ICON_PNG }} AppDir/${ICON_BASENAME}.png
-
-          # 2) also copy into theme path for runtime
-          cp ${{ env.ICON_PNG }} \
-             AppDir/usr/share/icons/hicolor/256x256/apps/${ICON_BASENAME}.png
-
-          # 3) Write the desktop file at the root (so appimagetool sees it)
+          cp ${{ env.ICON_PNG }} AppDir/usr/share/icons/hicolor/256x256/apps/${ICON_BASENAME}.png
           cat > AppDir/${{ env.BINARY_NAME }}.desktop <<EOF
           [Desktop Entry]
           Type=Application
@@ -83,18 +60,144 @@ jobs:
           Icon=${ICON_BASENAME}
           Categories=Utility;
           EOF
-
-          # 4) Symlink AppRun to your binary
           ln -s usr/bin/${{ env.BINARY_NAME }} AppDir/AppRun
           chmod +x AppDir/AppRun
-
       - name: Build AppImage
         run: |
-          ./appimagetool.AppImage AppDir \
-            iDevicePair-${{ env.VERSION }}-${{ matrix.arch }}.AppImage
-
+          ./appimagetool.AppImage AppDir iDevicePair-${{ env.VERSION }}-${{ matrix.arch }}.AppImage
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
         with:
           name: iDevicePair-${{ env.VERSION }}-${{ matrix.arch }}.AppImage
           path: iDevicePair-${{ env.VERSION }}-${{ matrix.arch }}.AppImage
+
+  # macOS: Build slices and bundle
+  macos-slices:
+    name: Build macOS Slices
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Uninstall Homebrew rustup
+        run: brew uninstall rustup rustup-init || true
+      - name: Set up Rust (x86_64)
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          target: x86_64-apple-darwin
+      - name: Build Intel slice
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-apple-darwin
+      - name: Set up Rust (ARM64)
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          target: aarch64-apple-darwin
+      - name: Build ARM64 slice
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target aarch64-apple-darwin
+      - name: Upload Intel slice
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x64
+          path: target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
+      - name: Upload ARM64 slice
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: target/aarch64-apple-darwin/release/${{ env.BINARY_NAME }}
+
+  macos-universal:
+    name: Create Universal Binary
+    needs: macos-slices
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Download Intel slice
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-x64
+          path: slice-x64
+      - name: Download ARM64 slice
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-arm64
+          path: slice-arm64
+      - name: Build universal binary
+        run: |
+          mkdir -p release
+          lipo slice-x64/${{ env.BINARY_NAME }} slice-arm64/${{ env.BINARY_NAME }} -create -output release/${{ env.BINARY_NAME }}
+      - name: Upload universal artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: release/${{ env.BINARY_NAME }}
+
+  macos-bundle-hdiutil:
+    name: Bundle .app & .dmg (hdiutil)
+    needs: macos-universal
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Download Universal Binary
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-universal
+          path: release
+      - name: Create .app Bundle
+        run: |
+          APP=${{ env.BINARY_NAME }}
+          mkdir -p "${APP}.app/Contents/MacOS" "${APP}.app/Contents/Resources"
+          cp release/${APP} "${APP}.app/Contents/MacOS/${APP}"
+          chmod +x "${APP}.app/Contents/MacOS/${APP}"
+          cat > "${APP}.app/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>${APP}</string>
+            <key>CFBundleIdentifier</key><string>com.github.se2cird2.${APP}</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleExecutable</key><string>${APP}</string>
+            <key>CFBundleIconFile</key><string>idevicepair.icns</string>
+          </dict>
+          </plist>
+          EOF
+          sips -s format icns "${{ env.ICON_PNG }}" --out "${APP}.app/Contents/Resources/idevicepair.icns"
+          xattr -rc "${APP}.app"
+          codesign --deep --force --sign - "${APP}.app"
+          plutil -lint "${APP}.app/Contents/Info.plist"
+      - name: Generate DMG with hdiutil
+        run: |
+          APP=${{ env.BINARY_NAME }}
+          mkdir -p release
+          rm -f "release/${APP}.dmg"
+          hdiutil create -volname "$APP" -srcfolder "${APP}.app" -ov -format UDZO "release/${APP}.dmg"
+      - name: Upload .app and .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-distribution-hdiutil
+          path: |
+            ${{ env.BINARY_NAME }}.app
+            release/${{ env.BINARY_NAME }}.dmg
+
+  build-windows:
+    name: Build Windows (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          target: x86_64-pc-windows-msvc
+      - name: Build
+        run: cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msvc
+          path: target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe
