@@ -53,91 +53,36 @@ jobs:
           name: linux-arm64
           path: target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
 
-  package-flatpak:
-    name: Package Flatpak (x86_64)
+  flatpak-build:
+    name: Build Flatpak bundles
     runs-on: ubuntu-latest
-    needs: build-linux-x64
+    needs: [build-linux-x64, build-linux-arm64]
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
+      options: --privileged
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+      fail-fast: false
     steps:
       - uses: actions/checkout@v3
-      - name: Download binary
-        uses: actions/download-artifact@v4
+      - name: Prepare binary
+        run: |
+          if [ "${{ matrix.arch }}" = "x86_64" ]; then
+            cp target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} ${BINARY_NAME}
+          else
+            cp target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }} ${BINARY_NAME}
+          fi
+      - name: Build Flatpak
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          name: linux-x64
-          path: .
-      - name: Install Flatpak build tools
-        run: sudo apt update && sudo apt install -y flatpak-builder
-      - name: Create manifest
-        run: |
-          cat > ${FLATPAK_ID}.json <<EOF
-          {
-            "app-id": "${FLATPAK_ID}",
-            "runtime": "org.freedesktop.Platform",
-            "runtime-version": "21.08",
-            "sdk": "org.freedesktop.Sdk",
-            "command": "${BINARY_NAME}",
-            "modules": [{
-              "name": "${BINARY_NAME}",
-              "buildsystem": "simple",
-              "build-commands": [
-                "install -Dm755 ${BINARY_NAME} \${FLATPAK_DEST}/bin/${BINARY_NAME}"
-              ],
-              "sources": [{"type":"file","path":"${BINARY_NAME}"}]
-            }]
-          }
-          EOF
-      - name: Build & bundle
-        run: |
-          flatpak-builder --force-clean --repo=repo build-dir ${FLATPAK_ID}.json
-          flatpak build-bundle repo ${FLATPAK_ID}.flatpak org.freedesktop.Platform 21.08
-      - name: Upload Flatpak
+          manifest-path: ${{ env.FLATPAK_ID }}.json
+          bundle: ${{ env.FLATPAK_ID }}-${{ matrix.arch }}.flatpak
+      - name: Upload Flatpak bundle
         uses: actions/upload-artifact@v4
         with:
-          name: flatpak-x64
-          path: ${FLATPAK_ID}.flatpak
-
-  package-flatpak-arm64:
-    name: Package Flatpak (ARM64)
-    runs-on: ubuntu-22.04-arm
-    needs: build-linux-arm64
-    steps:
-      - uses: actions/checkout@v3
-      - name: Download binary
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-arm64
-          path: .
-      - name: Install Flatpak build tools
-        run: sudo apt update && sudo apt install -y flatpak-builder
-      - name: Install Flatpak runtime deps
-        run: |
-          sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          sudo flatpak install -y org.freedesktop.Sdk//21.08 org.freedesktop.Platform//21.08
-      - name: Create manifest
-        run: |
-          cat > ${FLATPAK_ID}.arm64.json <<EOF
-          {
-            "app-id":"${FLATPAK_ID}",
-            "runtime":"org.freedesktop.Platform",
-            "runtime-version":"21.08",
-            "sdk":"org.freedesktop.Sdk",
-            "command":"${BINARY_NAME}",
-            "modules":[{
-              "name":"${BINARY_NAME}",
-              "buildsystem":"simple",
-              "build-commands":["install -Dm755 ${BINARY_NAME} \${FLATPAK_DEST}/bin/${BINARY_NAME}"],
-              "sources":[{"type":"file","path":"${BINARY_NAME}"}]
-            }]
-          }
-          EOF
-      - name: Build & bundle
-        run: |
-          flatpak-builder --force-clean --repo=repo-arm64 build-dir-arm64 ${FLATPAK_ID}.arm64.json
-          flatpak build-bundle repo-arm64 ${FLATPAK_ID}.arm64.flatpak org.freedesktop.Platform 21.08
-      - name: Upload Flatpak
-        uses: actions/upload-artifact@v4
-        with:
-          name: flatpak-arm64
-          path: ${FLATPAK_ID}.arm64.flatpak
+          name: flatpak-${{ matrix.arch }}
+          path: ${{ env.FLATPAK_ID }}-${{ matrix.arch }}.flatpak
 
   package-appimage:
     name: Package AppImage (x86_64)
