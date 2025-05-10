@@ -1,4 +1,3 @@
-# .github/workflows/ci.yml
 name: iDevicePair Builds
 
 on:
@@ -12,7 +11,6 @@ env:
   ICON_PNG: icons/idevicepair.png
 
 jobs:
-  # Linux: Build AppImage for x86_64 and aarch64
   build-appimage:
     name: Build & Upload AppImage for ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
@@ -29,9 +27,8 @@ jobs:
             toolfile: appimagetool-aarch64.AppImage
     steps:
       - uses: actions/checkout@v3
-
       - name: Cache Cargo registry & build artifacts
-        uses: actions/cache@v3
+        uses: actions/cache@v3.4.0
         with:
           path: |
             ~/.cargo/registry
@@ -41,29 +38,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
             ${{ runner.os }}-cargo-
-
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
           target: ${{ matrix.target }}
-
       - name: Install FUSE & AppStream
         run: |
           sudo apt-get update
           sudo apt-get install -y libfuse2 appstream
-
       - name: Build native binary
         run: |
           cargo build --release --bin ${{ env.BINARY_NAME }} --target ${{ matrix.target }}
-
       - name: Download appimagetool
         run: |
           wget -c https://github.com/AppImage/AppImageKit/releases/download/continuous/${{ matrix.toolfile }} \
             -O appimagetool.AppImage
           chmod +x appimagetool.AppImage
-
       - name: Prepare AppDir
         run: |
           mkdir -p AppDir/usr/bin AppDir/usr/share/icons/hicolor/256x256/apps
@@ -82,19 +74,17 @@ jobs:
           EOF
           ln -s usr/bin/${{ env.BINARY_NAME }} AppDir/AppRun
           chmod +x AppDir/AppRun
-
       - name: Build AppImage
         run: |
           FILENAME="${{ env.APP_NAME }}-${{ env.VERSION }}-linux-${{ matrix.arch }}.AppImage"
           ./appimagetool.AppImage AppDir "$FILENAME"
-
       - name: Upload AppImage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.4.0
         with:
+          include-hidden-files: true
           name: ${{ env.APP_NAME }}-${{ env.VERSION }}-linux-${{ matrix.arch }}.AppImage
           path: ${{ env.APP_NAME }}-${{ env.VERSION }}-linux-${{ matrix.arch }}.AppImage
 
-  # macOS: Build universal .app
   macos-universal:
     name: Build & Upload macOS Universal .app
     runs-on: macos-latest
@@ -103,46 +93,40 @@ jobs:
         arch: [x86_64, arm64]
     steps:
       - uses: actions/checkout@v3
-
       - name: Set up Rust for ${{ matrix.arch }}
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
           target: ${{ matrix.arch == 'x86_64' && 'x86_64-apple-darwin' || 'aarch64-apple-darwin' }}
-
       - name: Build ${{ matrix.arch }} slice
         run: |
           cargo build --release \
             --bin ${{ env.BINARY_NAME }} \
             --target ${{ matrix.arch == 'x86_64' && 'x86_64-apple-darwin' || 'aarch64-apple-darwin' }}
-
       - name: Upload ${{ matrix.arch }} slice
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.4.0
         with:
+          include-hidden-files: true
           name: slice-${{ matrix.arch }}
           path: target/${{ matrix.arch == 'x86_64' && 'x86_64-apple-darwin' || 'aarch64-apple-darwin' }}/release/${{ env.BINARY_NAME }}
 
-  # Combine slices into a universal .app and upload it
   macos-bundle:
     name: Create & Upload Universal .app Bundle
     needs: macos-universal
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
-
       - name: Download x86_64 slice
         uses: actions/download-artifact@v4
         with:
           name: slice-x86_64
           path: slice-x86_64
-
       - name: Download arm64 slice
         uses: actions/download-artifact@v4
         with:
           name: slice-arm64
           path: slice-arm64
-
       - name: Create .app Bundle
         run: |
           APP="${{ env.APP_NAME }}.app"
@@ -150,7 +134,6 @@ jobs:
           lipo slice-x86_64/${{ env.BINARY_NAME }} slice-arm64/${{ env.BINARY_NAME }} \
             -create -output "$APP/Contents/MacOS/${{ env.APP_NAME }}"
           chmod +x "$APP/Contents/MacOS/${{ env.APP_NAME }}"
-          # Info.plist
           cat > "$APP/Contents/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
@@ -167,27 +150,24 @@ jobs:
           </dict>
           </plist>
           EOF
-          # Icon
           sips -s format icns "${{ env.ICON_PNG }}" \
             --out "$APP/Contents/Resources/idevicepair.icns"
           xattr -rc "$APP"
           codesign --deep --force --sign - "$APP"
-
       - name: Upload .app Bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.4.0
         with:
+          include-hidden-files: true
           name: ${{ env.APP_NAME }}-${{ env.VERSION }}-macos-universal.app
           path: ${{ env.APP_NAME }}.app
 
-  # Windows: Build and upload .exe
   build-windows:
     name: Build & Upload Windows .exe
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
-
       - name: Cache Cargo registry & build artifacts
-        uses: actions/cache@v3
+        uses: actions/cache@v3.4.0
         with:
           path: |
             ~/.cargo/registry
@@ -197,14 +177,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
             ${{ runner.os }}-cargo-
-
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
           target: x86_64-pc-windows-msvc
-
       - name: Build and Rename Executable
         shell: bash
         run: |
@@ -212,9 +190,9 @@ jobs:
           mkdir -p release
           cp target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe \
              release/${{ env.APP_NAME }}-${{ env.VERSION }}-windows-x86_64.exe
-
       - name: Upload Windows .exe
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.4.0
         with:
+          include-hidden-files: true
           name: ${{ env.APP_NAME }}-${{ env.VERSION }}-windows-x86_64.exe
           path: release/${{ env.APP_NAME }}-${{ env.VERSION }}-windows-x86_64.exe
