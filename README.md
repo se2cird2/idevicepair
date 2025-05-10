@@ -21,43 +21,43 @@ but the API and feature-set are far from final or even planned.
 
 To keep dependency bloat and compile time down, everything is contained in features.
 
-- afc - Apple File Conduit, partial/in-progress support
-- amfi - Apple Mobile File Integrity service
-- core_device_proxy - Start a secure tunnel to access protected services
-- debug_proxy - Send GDB commands
-- dvt - Developer tools/instruments
-- heartbeat - Heartbeat the device
-- installation_proxy - Install/manage apps, partial support
-- springboardservices - Manage the sprinboard, partial support
-- misagent - Manage provisioning profiles
-- mobile_image_mounter - Manage the DDI mounted on the device
-- location_simulation - Simulate the GPS location
-- pair - Generate pairing files for device authentication
-- tcp - Connect to devices over TCP
-- tunnel_tcp_stack - Naive software TCP stack for core_device_proxy
-- tss - Requests to Apple's TSS servers, partial support
-- tunneld - Interface with pymobiledevice3's tunneld
-- usbmuxd - Connect to devices over usbmuxd daemon
-- xpc - Get protected services over RSD via XPC
-- full (all features)
+| Feature                | Description |
+|------------------------|-----------------------------------------------------------------------------|
+| `afc`                  | Apple File Conduit for file system access.|
+| `amfi`                 | Apple mobile file integrity service |
+| `core_device_proxy`    | Start a secure tunnel to access protected services. |
+| `crashreportcopymobile`| Copy crash reports.|
+| `debug_proxy`          | Send GDB commands to the device.|
+| `dvt`                  | Access Apple developer tools (e.g. Instruments).|
+| `heartbeat`            | Maintain a heartbeat connection.|
+| `house_arrest` | Manage files in app containers |
+| `installation_proxy`   | Manage app installation and uninstallation.|
+| `springboardservices`  | Control SpringBoard (e.g. UI interactions). Partial support.|
+| `misagent`             | Manage provisioning profiles on the device.|
+| `mobile_image_mounter` | Manage DDI images.|
+| `location_simulation`  | Simulate GPS locations on the device.|
+| `pair`                 | Pair the device.|
+| `syslog_relay` | Relay system logs from the device |
+| `tcp`                  | Connect to devices over TCP.|
+| `tunnel_tcp_stack`     | Naive in-process TCP stack for `core_device_proxy`.|
+| `tss`                  | Make requests to Apple’s TSS servers. Partial support.|
+| `tunneld`              | Interface with [pymobiledevice3](https://github.com/doronz88/pymobiledevice3)’s tunneld. |
+| `usbmuxd`              | Connect using the usbmuxd daemon.|
+| `xpc`                  | Access protected services via XPC over RSD. |
 
 ### Planned/TODO
 
 Finish the following:
 
-- lockdown support
 - springboard
 
 Implement the following:
 
 - companion_proxy
-- crash_reports
 - diagnostics
-- house_arrest
 - mobilebackup2
 - notification_proxy
 - screenshot
-- syslog_relay
 - webinspector
 
 As this project is done in my free time within my busy schedule, there

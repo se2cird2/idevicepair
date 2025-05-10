@@ -1,35 +1,11 @@
 #![doc = include_str!("../README.md")]
 // Jackson Coxson
 
-#[cfg(feature = "afc")]
-pub mod afc;
-#[cfg(feature = "amfi")]
-pub mod amfi;
 #[cfg(feature = "pair")]
 mod ca;
-#[cfg(feature = "core_device_proxy")]
-pub mod core_device_proxy;
-#[cfg(feature = "debug_proxy")]
-pub mod debug_proxy;
-#[cfg(feature = "dvt")]
-pub mod dvt;
-#[cfg(feature = "heartbeat")]
-pub mod heartbeat;
-#[cfg(feature = "xpc")]
-mod http2;
-#[cfg(feature = "installation_proxy")]
-pub mod installation_proxy;
-pub mod lockdown;
-#[cfg(feature = "misagent")]
-pub mod misagent;
-#[cfg(feature = "mobile_image_mounter")]
-pub mod mobile_image_mounter;
-#[cfg(any(feature = "pair", feature = "pairing_file"))]
 pub mod pairing_file;
 pub mod provider;
 mod sni;
-#[cfg(feature = "springboardservices")]
-pub mod springboardservices;
 #[cfg(feature = "tunnel_tcp_stack")]
 pub mod tcp;
 #[cfg(feature = "tss")]
@@ -39,8 +15,9 @@ pub mod tunneld;
 #[cfg(feature = "usbmuxd")]
 pub mod usbmuxd;
 mod util;
-#[cfg(feature = "xpc")]
-pub mod xpc;
+
+pub mod services;
+pub use services::*;
 
 use log::{debug, error, trace};
 use provider::IdeviceProvider;
@@ -203,7 +180,7 @@ impl Idevice {
     ///
     /// # Errors
     /// Returns `IdeviceError` if transmission fails
-    async fn send_raw(&mut self, message: &[u8]) -> Result<(), IdeviceError> {
+    pub async fn send_raw(&mut self, message: &[u8]) -> Result<(), IdeviceError> {
         self.send_raw_with_progress(message, |_| async {}, ()).await
     }
 
@@ -220,7 +197,7 @@ impl Idevice {
     ///
     /// # Errors
     /// Returns `IdeviceError` if transmission fails
-    async fn send_raw_with_progress<Fut, S>(
+    pub async fn send_raw_with_progress<Fut, S>(
         &mut self,
         message: &[u8],
         callback: impl Fn(((usize, usize), S)) -> Fut,
@@ -256,7 +233,7 @@ impl Idevice {
     ///
     /// # Errors
     /// Returns `IdeviceError` if reading fails or connection is closed prematurely
-    async fn read_raw(&mut self, len: usize) -> Result<Vec<u8>, IdeviceError> {
+    pub async fn read_raw(&mut self, len: usize) -> Result<Vec<u8>, IdeviceError> {
         if let Some(socket) = &mut self.socket {
             let mut buf = vec![0; len];
             socket.read_exact(&mut buf).await?;
@@ -276,7 +253,7 @@ impl Idevice {
     ///
     /// # Errors
     /// Returns `IdeviceError` if reading fails
-    async fn read_any(&mut self, max_size: u32) -> Result<Vec<u8>, IdeviceError> {
+    pub async fn read_any(&mut self, max_size: u32) -> Result<Vec<u8>, IdeviceError> {
         if let Some(socket) = &mut self.socket {
             let mut buf = vec![0; max_size as usize];
             let len = socket.read(&mut buf).await?;
@@ -313,6 +290,38 @@ impl Idevice {
                 }
             }
             Ok(res)
+        } else {
+            Err(IdeviceError::NoEstablishedConnection)
+        }
+    }
+
+    #[cfg(feature = "syslog_relay")]
+    async fn read_until_delim(
+        &mut self,
+        delimiter: &[u8],
+    ) -> Result<Option<bytes::BytesMut>, IdeviceError> {
+        if let Some(socket) = &mut self.socket {
+            let mut buffer = bytes::BytesMut::with_capacity(1024);
+            let mut temp = [0u8; 1024];
+
+            loop {
+                let n = socket.read(&mut temp).await?;
+                if n == 0 {
+                    if buffer.is_empty() {
+                        return Ok(None); // EOF and no data
+                    } else {
+                        return Ok(Some(buffer)); // EOF but return partial data
+                    }
+                }
+
+                buffer.extend_from_slice(&temp[..n]);
+
+                if let Some(pos) = buffer.windows(delimiter.len()).position(|w| w == delimiter) {
+                    let mut line = buffer.split_to(pos + delimiter.len());
+                    line.truncate(line.len() - delimiter.len()); // remove delimiter
+                    return Ok(Some(line));
+                }
+            }
         } else {
             Err(IdeviceError::NoEstablishedConnection)
         }
@@ -451,6 +460,10 @@ pub enum IdeviceError {
     #[cfg(feature = "afc")]
     #[error("missing file attribute")]
     AfcMissingAttribute,
+
+    #[cfg(feature = "crashreportcopymobile")]
+    #[error("crash report mover sent the wrong response")]
+    CrashReportMoverBadResponse(Vec<u8>),
 
     #[cfg(any(feature = "tss", feature = "tunneld"))]
     #[error("http reqwest error")]

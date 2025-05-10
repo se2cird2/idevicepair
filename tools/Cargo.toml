@@ -1,16 +1,14 @@
 [package]
-name        = "idevice-tools"
-version     = "0.1.0"
-edition     = "2021"
-license     = "MIT"
-authors     = ["Jackson Coxson"]
+name = "idevice-tools"
 description = "Rust binary tools to interact with services on iOS devices."
-repository  = "https://github.com/jkcoxson/idevice"
-keywords    = ["lockdownd", "ios", "pair", "gui", "utilities"]
+authors = ["Jackson Coxson"]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+documentation = "https://docs.rs/idevice"
+repository = "https://github.com/jkcoxson/idevice"
+keywords = ["lockdownd", "ios"]
 
-# 
-# All of your tools:
-# 
 [[bin]]
 name = "ideviceinfo"
 path = "src/ideviceinfo.rs"
@@ -64,53 +62,30 @@ name = "afc"
 path = "src/afc.rs"
 
 [[bin]]
+name = "crash_logs"
+path = "src/crash_logs.rs"
+
+[[bin]]
 name = "amfi"
 path = "src/amfi.rs"
 
 [[bin]]
-name = "pair_gui"
-path = "src/pair_gui.rs"
+name = "pair"
+path = "src/pair.rs"
 
+[[bin]]
+name = "syslog_relay"
+path = "src/syslog_relay.rs"
 
 [dependencies]
-idevice        = { path = "../idevice", features = ["full"] }
-tokio          = { version = "1.43", features = ["macros", "rt-multi-thread", "time", "io-util"] }
-log            = "0.4"
-env_logger     = "0.11"
-uuid           = { version = "1", features = ["v4"] }
-plist          = "1.5"      # For handling plist values in device info
-
-
-crossbeam      = "0.8"        # for crossbeam::channel::{unbounded, }
-eframe         = "0.31"
-rfd            = "0.15"       # FileDialog for folder picking
-serde          = { version = "1.0", features = ["derive"] }
-serde_json     = "1.0"         # prefs read/write
-directories    = "4.0"         # ProjectDirs for prefs file
-
-clap           = { version = "4.5", optional = true }
-
-[profile.dev.package.idevice]
-opt-level = 3
-
-[profile.dev]
-opt-level = 3
-
-[package.metadata.bundle]
-# The name of the generated macOS application
-name              = "idevice-tools"
-# Reverse‑DNS identifier for your app bundle
-identifier        = "com.yourdomain.idevice-tools"
-# Path(s) to your .icns icon file(s)
-icon              = ["assets/icon.icns"]
-# Extra files/resources to copy into the .app bundle
-resources         = ["resources/**"]
-# Version string (can mirror package.version)
-version           = "0.1.0"
-# One‑line summary for macOS’s Info.plist
-short_description = "Rust tools for interacting with iOS devices"
-# Longer description for your users
-long_description  = """
-  A suite of Rust-based command‑line and GUI utilities to work
-  with lockdownd, pairing, and other iOS services.
-"""
+idevice = { path = "../idevice", features = ["full"] }
+tokio = { version = "1.43", features = ["io-util", "macros", "time", "full"] }
+log = { version = "0.4" }
+env_logger = { version = "0.11" }
+tun-rs = { version = "1.5", features = ["async"] }
+sha2 = { version = "0.10" }
+ureq = { version = "3" }
+clap = { version = "4.5" }
+plist = { version = "1.7" }
+ns-keyed-archive = "0.1.2"
+uuid = "1.16"
