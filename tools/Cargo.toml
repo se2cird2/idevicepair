@@ -68,12 +68,10 @@ name = "amfi"
 path = "src/amfi.rs"
 
 [[bin]]
-name = "pair"
-path = "src/pair.rs"
+name = "pair_gui"
+path = "src/pair_gui.rs"
 
-# 
-# Shared dependencies for all tools:
-# 
+
 [dependencies]
 idevice        = { path = "../idevice", features = ["full"] }
 tokio          = { version = "1.43", features = ["macros", "rt-multi-thread", "time", "io-util"] }
@@ -82,9 +80,7 @@ env_logger     = "0.11"
 uuid           = { version = "1", features = ["v4"] }
 plist          = "1.5"      # For handling plist values in device info
 
-# 
-# GUI / serialization deps (for src/pair.rs):
-# 
+
 crossbeam      = "0.8"        # for crossbeam::channel::{unbounded, }
 eframe         = "0.31"
 rfd            = "0.15"       # FileDialog for folder picking
@@ -92,12 +88,8 @@ serde          = { version = "1.0", features = ["derive"] }
 serde_json     = "1.0"         # prefs read/write
 directories    = "4.0"         # ProjectDirs for prefs file
 
-# (you can remove clap if youre not using it in pair.rs)
 clap           = { version = "4.5", optional = true }
 
-# 
-# tuning dev build of the idevice lib
-# 
 [profile.dev.package.idevice]
 opt-level = 3
 
