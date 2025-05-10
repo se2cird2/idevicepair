@@ -1,9 +1,13 @@
 // src/main.rs
+
 mod types;
 mod prefs;
 mod util;
 mod ui;
 mod worker;
+
+// add this:
+use worker::worker_loop::worker_loop;
 
 use prefs::load_prefs;
 use util::canonical_or_create;
@@ -11,7 +15,6 @@ use crossbeam::channel::unbounded;
 use tokio::runtime::Runtime;
 use eframe::{run_native, NativeOptions};
 use ui::app::PairApp;
-use worker::worker_loop;
 
 fn main() -> eframe::Result<()> {
     env_logger::init();
@@ -25,6 +28,7 @@ fn main() -> eframe::Result<()> {
 
     std::thread::spawn(move || {
         let rt = Runtime::new().unwrap();
+        // call the function, not the module
         rt.block_on(worker_loop(rx_cmd, tx_evt));
     });
 

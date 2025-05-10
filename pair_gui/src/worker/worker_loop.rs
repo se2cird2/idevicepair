@@ -1,69 +1,76 @@
-// src/worker/worker_loop.rs
-use crate::types::{Command, GuiEvent};
-use crossbeam::channel::{Receiver, Sender};
-use crate::worker::device::{
-    get_device_info, get_device_model, get_device_name, pair_one, scan_devices,
+use crate::{
+    types::{Command, GuiEvent},
+    worker::{device::*, afc::list_files},
 };
-use crate::worker::afc::handle_afc;
-use crate::util::reveal_in_file_browser;
+use crossbeam::channel::{Receiver, Sender};
 
 pub async fn worker_loop(rx: Receiver<Command>, tx: Sender<GuiEvent>) {
     loop {
         match rx.recv() {
-            Ok(cmd) => match cmd {
-                Command::Refresh => {
-                    match scan_devices().await {
-                        Ok(udids) => {
-                            let mut devices = Vec::new();
-                            for udid in udids {
-                                let name = get_device_name(&udid).await.unwrap_or_else(|_| udid.clone());
-                                let model = get_device_model(&udid).await.unwrap_or_else(|_| String::new());
-                                let display = if model.is_empty() {
-                                    name.clone()
-                                } else {
-                                    format!("{} ({})", name, model)
-                                };
-                                devices.push((udid.clone(), display));
-                                if let Ok(info) = get_device_info(&udid).await {
-                                    let _ = tx.send(GuiEvent::DeviceInfo { udid: udid.clone(), info });
-                                }
-                            }
-                            let _ = tx.send(GuiEvent::Devices(devices));
-                        }
-                        Err(e) => {
-                            let _ = tx.send(GuiEvent::Status(format!("Error scanning: {:?}", e)));
-                        }
+            Ok(Command::Refresh) => {
+                let _ = tx.send(GuiEvent::Status("Refreshing...".into()));
+                let udids = match scan_devices().await {
+                    Ok(udids) => udids,
+                    Err(e) => {
+                        let _ = tx.send(GuiEvent::Status(format!("Error: {e}")));
+                        continue;
+                    }
+                };
+                for udid in &udids {
+                    if let Ok(info) = get_device_info(udid).await {
+                        let _ = tx.send(GuiEvent::DeviceInfo {
+                            udid: udid.clone(),
+                            info,
+                        });
                     }
                 }
-                Command::Pair { udid, out_dir } => {
-                    let _ = tx.send(GuiEvent::Status(format!("Pairing {}", udid)));
-                    match pair_one(&out_dir, &udid).await {
-                        Ok(dir) => {
-                            let _ = tx.send(GuiEvent::Status(format!("Successfully paired {}", udid)));
-                            reveal_in_file_browser(&dir);
-                        }
-                        Err(e) => {
-                            let _ = tx.send(GuiEvent::Status(format!("Error pairing {}: {:?}", udid, e)));
-                        }
+                let list = udids
+                    .iter()
+                    .map(|udid| (udid.clone(), udid.clone()))
+                    .collect();
+                let _ = tx.send(GuiEvent::Devices(list));
+            }
+
+            Ok(Command::Pair { udid, out_dir }) => {
+                let res = pair_one(&out_dir, &udid).await;
+                let _ = match res {
+                    Ok(_) => tx.send(GuiEvent::Status(format!("Paired {udid}"))),
+                    Err(e) => tx.send(GuiEvent::Status(format!("Pair error: {e}"))),
+                };
+            }
+
+            Ok(Command::GetDeviceInfo { udid }) => {
+                let res = get_device_info(&udid).await;
+                match res {
+                    Ok(info) => {
+                        let _ = tx.send(GuiEvent::DeviceInfo { udid, info });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(GuiEvent::Status(format!("Error: {e}")));
                     }
                 }
-                Command::GetDeviceInfo { udid } => {
-                    let _ = tx.send(GuiEvent::Status(format!("Getting info for {}", udid)));
-                    match get_device_info(&udid).await {
-                        Ok(info) => {
-                            let _ = tx.send(GuiEvent::DeviceInfo { udid, info });
-                        }
-                        Err(e) => {
-                            let _ = tx.send(GuiEvent::Status(format!("Error getting device info: {:?}", e)));
-                        }
+            }
+
+            Ok(Command::AfcList {
+                udid,
+                path,
+                container,
+                documents,
+            }) => {
+                let _ = tx.send(GuiEvent::Status(format!("Listing: {path}")));
+                match list_files(&udid, &path, container.as_deref(), documents.as_deref()).await {
+                    Ok(list) => {
+                        let output = list.join("\n");
+                        let _ = tx.send(GuiEvent::Status(format!(
+                            "Contents of {path}:\n{output}"
+                        )));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(GuiEvent::Status(format!("AFC error: {e}")));
                     }
                 }
-                // AFC commands
-                cmd @ Command::AfcList { .. } => {
-                    handle_afc(cmd, &tx).await;
-                }
-                _ => {}
-            },
+            }
+
             Err(_) => break,
         }
     }

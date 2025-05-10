@@ -1,7 +1,7 @@
 // src/prefs.rs
-use crate::types::Prefs;
+
 use directories::ProjectDirs;
-use serde_json;
+use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
 
 #[derive(Serialize, Deserialize, Default)]
