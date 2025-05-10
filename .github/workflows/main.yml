@@ -1,3 +1,4 @@
+# .github/workflows/ci.yml
 name: iDevicePair Builds
 
 on:
@@ -28,6 +29,18 @@ jobs:
             toolfile: appimagetool-aarch64.AppImage
     steps:
       - uses: actions/checkout@v3
+
+      - name: Cache Cargo registry & build artifacts
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/index
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ matrix.target }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -91,7 +104,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      # Build each slice
       - name: Set up Rust for ${{ matrix.arch }}
         uses: actions-rs/toolchain@v1
         with:
@@ -160,6 +172,7 @@ jobs:
             --out "$APP/Contents/Resources/idevicepair.icns"
           xattr -rc "$APP"
           codesign --deep --force --sign - "$APP"
+
       - name: Upload .app Bundle
         uses: actions/upload-artifact@v4
         with:
@@ -173,6 +186,18 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: Cache Cargo registry & build artifacts
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/index
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-x86_64-pc-windows-msvc
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
+
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -185,8 +210,8 @@ jobs:
         run: |
           cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
           mkdir -p release
-          cp "target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe" \
-             "release/${{ env.APP_NAME }}-${{ env.VERSION }}-windows-x86_64.exe"
+          cp target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe \
+             release/${{ env.APP_NAME }}-${{ env.VERSION }}-windows-x86_64.exe
 
       - name: Upload Windows .exe
         uses: actions/upload-artifact@v4
