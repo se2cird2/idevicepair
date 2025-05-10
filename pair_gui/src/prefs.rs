@@ -1,7 +1,13 @@
+// src/prefs.rs
 use crate::types::Prefs;
 use directories::ProjectDirs;
-use std::fs;
-use std::path::PathBuf;
+use serde_json;
+use std::{fs, path::PathBuf};
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct Prefs {
+    pub output_dir: Option<PathBuf>,
+}
 
 pub fn load_prefs() -> Prefs {
     if let Some(proj_dirs) = ProjectDirs::from("", "", "pair_gui") {
