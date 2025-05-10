@@ -132,48 +132,59 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
+
       - name: Download x86_64 slice
         uses: actions/download-artifact@v4
         with:
           name: slice-x86_64
           path: slice-x86_64
-      - name: Download arm64 slice
+
+      - name: Download arm64 slice        
         uses: actions/download-artifact@v4
         with:
           name: slice-arm64
           path: slice-arm64
-          - name: Create .app Bundle
-          run: |
-            APP=${{ env.BINARY_NAME }}
-            mkdir -p "${APP}.app/Contents/MacOS" "${APP}.app/Contents/Resources"
-            cp release/${APP} "${APP}.app/Contents/MacOS/${APP}"
-            chmod +x "${APP}.app/Contents/MacOS/${APP}"
-            cat > "${APP}.app/Contents/Info.plist" <<EOF
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-              <key>CFBundleName</key><string>${APP}</string>
-              <key>CFBundleIdentifier</key><string>com.github.se2cird2.${APP}</string>
-              <key>CFBundleVersion</key><string>${VERSION}</string>
-              <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-              <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-              <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleExecutable</key><string>${APP}</string>
-              <key>CFBundleIconFile</key><string>idevicepair.icns</string>
-            </dict>
-            </plist>
-            EOF
-            sips -s format icns "${{ env.ICON_PNG }}" --out "${APP}.app/Contents/Resources/idevicepair.icns"
-            xattr -rc "${APP}.app"
-            codesign --deep --force --sign - "${APP}.app"
-            plutil -lint "${APP}.app/Contents/Info.plist"
-      - name: Upload .app Bundle
+
+      - name: Create .app Bundle              
+        run: |
+          APP=${{ env.BINARY_NAME }}
+          mkdir -p "${APP}.app/Contents/MacOS" "${APP}.app/Contents/Resources"
+
+          # merge the two architecture slices into one universal binary
+          lipo -create slice-x86_64/${APP} slice-arm64/${APP} \
+               -output "${APP}.app/Contents/MacOS/${APP}"
+          chmod +x "${APP}.app/Contents/MacOS/${APP}"
+
+          cat > "${APP}.app/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>${APP}</string>
+            <key>CFBundleIdentifier</key><string>com.github.se2cird2.${APP}</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleExecutable</key><string>${APP}</string>
+            <key>CFBundleIconFile</key><string>idevicepair.icns</string>
+          </dict>
+          </plist>
+          EOF
+
+          sips -s format icns "${{ env.ICON_PNG }}" \
+               --out "${APP}.app/Contents/Resources/idevicepair.icns"
+          xattr -rc "${APP}.app"
+          codesign --deep --force --sign - "${APP}.app"
+          plutil -lint "${APP}.app/Contents/Info.plist"
+
+      - name: Upload .app Bundle      
         uses: actions/upload-artifact@v4.4.0
         with:
           include-hidden-files: true
           name: ${{ env.APP_NAME }}-${{ env.VERSION }}-macos-universal.app
           path: ${{ env.APP_NAME }}.app
+
 
   # Windows: Build and upload .exe
   build-windows:
