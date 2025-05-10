@@ -181,11 +181,12 @@ jobs:
           target: x86_64-pc-windows-msvc
 
       - name: Build and Rename Executable
+        shell: bash
         run: |
           cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
           mkdir -p release
-          copy target\x86_64-pc-windows-msvc\release\${{ env.BINARY_NAME }}.exe \
-            release\${{ env.APP_NAME }}-${{ env.VERSION }}-windows-x86_64.exe
+          cp "target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe" \
+             "release/${{ env.APP_NAME }}-${{ env.VERSION }}-windows-x86_64.exe"
 
       - name: Upload Windows .exe
         uses: actions/upload-artifact@v4
