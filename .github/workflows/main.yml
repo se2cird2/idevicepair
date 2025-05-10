@@ -1,227 +1,292 @@
-name: iDevicePair Builds
+//! pair_gui_with_afc.rs — “everything from pair_gui and afc” in a **single** self‑contained Rust
+//! source file that shows how to pair to an iOS device and open an AFC (Apple File Conduit)
+//! session in a *native* GUI using **eframe/egui**.
+//!
+//! This version incorporates the compile‑time fixes you just reported:
+//! * **Removed** the stale `house_arrest` import.
+//! * Updated to **eframe 0.27**’s `run_native` signature (closure now returns
+//!   `Result<Box<dyn App>, Box<dyn std::error::Error + Send + Sync>>`).
+//! * Uses the current `UsbmuxdDevice` fields (`udid`, `device_id`,
+//!   `connection_type`) instead of the no‑longer‑present `device_name` or
+//!   `properties` fields.
+//! * Avoids the `plist::Value` super‑fluous conversion that triggered the
+//!   `From<&plist::Value>` error you saw.
+//!
+//! ────────────────────────────────────────────────────────────────────────────────
+//! ## Crate features you must enable in *Cargo.toml*
+//! ```toml
+//! idevice = { version = "^0.1", default-features = false, features = [
+//!     "usbmuxd",  # list devices & open lockdown
+//!     "pair",      # high‑level pairing helper
+//!     "afc"        # Apple File Conduit FS
+//! ] }
+//! eframe  = { version = "^0.27", features = ["wayland", "x11"] }
+//! anyhow  = "^1.0"
+//! thiserror = "^1.0"
+//! log     = "^0.4"
+//! env_logger = "^0.11"
+//! tokio   = { version = "^1.43", features = ["rt-multi-thread", "macros"] }
+//! ```
+//! > **Note:** All asynchronous device traffic runs on a Tokio multi‑threaded
+//! > runtime that lives inside the GUI struct so the interface never blocks.
+//!
+//! ────────────────────────────────────────────────────────────────────────────────
+//! ## The code
 
-on:
-  push:
-    branches: [ main ]
+use anyhow::{Context, Result};
+use eframe::{egui, App};
+use idevice::{
+    afc::AfcClient,
+    lockdown::{LockdowndClient, PairRecord},
+    usbmuxd::{UsbmuxdConnection, UsbmuxdDevice},
+};
+use log::{error, info};
+use std::sync::Arc;
+use thiserror::Error;
+use tokio::{runtime::Runtime, sync::mpsc};
 
-env:
-  BINARY_NAME: pairgui
-  APP_NAME: iDevicePair
-  VERSION: 0.0.1
-  ICON_PNG: icons/idevicepair.png
+//───────────────────────────────────────────────────────────────────────────────
+// Error type — displayed verbatim in a red label up top.
+//───────────────────────────────────────────────────────────────────────────────
+#[derive(Error, Debug)]
+pub enum AppError {
+    #[error("Device not selected")]
+    NoDevice,
+    #[error("Device disconnected")]
+    Disconnected,
+    #[error("{0}")]
+    Other(#[from] anyhow::Error),
+}
 
-jobs:
-  # Linux: Build AppImage for x86_64 and aarch64
-  build-appimage:
-    name: Build & Upload AppImage for ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            toolfile: appimagetool-x86_64.AppImage
-          - arch: aarch64
-            runner: ubuntu-22.04-arm
-            target: aarch64-unknown-linux-gnu
-            toolfile: appimagetool-aarch64.AppImage
-    steps:
-      - uses: actions/checkout@v3
+impl From<AppError> for String {
+    fn from(err: AppError) -> Self {
+        err.to_string()
+    }
+}
 
-      - name: Cache Cargo registry & build artifacts
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/index
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ matrix.target }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
-            ${{ runner.os }}-cargo-
+//───────────────────────────────────────────────────────────────────────────────
+//  Message bridges between GUI <‑> background task
+//───────────────────────────────────────────────────────────────────────────────
+#[derive(Debug)]
+enum GuiToBg {
+    RefreshDevices,
+    Pair(String /* udid */),
+    ListAfc(String /* udid */, String /* path */),
+}
 
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: ${{ matrix.target }}
+#[derive(Debug)]
+enum BgToUi {
+    DeviceList(Vec<UsbmuxdDevice>),
+    PairComplete { udid: String, pair_record: PairRecord },
+    AfcListing { path: String, entries: Vec<FileEntry> },
+    Error(String),
+}
 
-      - name: Install FUSE & AppStream
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libfuse2 appstream
+#[derive(Debug, Clone)]
+struct FileEntry {
+    name: String,
+    is_dir: bool,
+    size: Option<u64>,
+}
 
-      - name: Build native binary
-        run: |
-          cargo build --release --bin ${{ env.BINARY_NAME }} --target ${{ matrix.target }}
+//───────────────────────────────────────────────────────────────────────────────
+//  The actual egui application
+//───────────────────────────────────────────────────────────────────────────────
+struct PairGuiApp {
+    rt: Arc<Runtime>,
+    tx: mpsc::UnboundedSender<GuiToBg>,
+    rx: mpsc::UnboundedReceiver<BgToUi>,
 
-      - name: Download appimagetool
-        run: |
-          wget -c https://github.com/AppImage/AppImageKit/releases/download/continuous/${{ matrix.toolfile }} \
-            -O appimagetool.AppImage
-          chmod +x appimagetool.AppImage
+    // UI‑state ---------------------------------------------------------------
+    devices: Vec<UsbmuxdDevice>,
+    selected: Option<String>, // UDID
+    paired: bool,
+    cwd: String,
+    entries: Vec<FileEntry>,
+    last_error: Option<String>,
+}
 
-      - name: Prepare AppDir
-        run: |
-          mkdir -p AppDir/usr/bin AppDir/usr/share/icons/hicolor/256x256/apps
-          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} AppDir/usr/bin/
-          ICON_NAME=${ICON_PNG##*/}
-          ICON_BASENAME=${ICON_NAME%.*}
-          cp ${{ env.ICON_PNG }} AppDir/${ICON_BASENAME}.png
-          cp ${{ env.ICON_PNG }} AppDir/usr/share/icons/hicolor/256x256/apps/${ICON_BASENAME}.png
-          cat > AppDir/${{ env.BINARY_NAME }}.desktop <<EOF
-          [Desktop Entry]
-          Type=Application
-          Name=${{ env.APP_NAME }}
-          Exec=${{ env.BINARY_NAME }} %u
-          Icon=${ICON_BASENAME}
-          Categories=Utility;
-          EOF
-          ln -s usr/bin/${{ env.BINARY_NAME }} AppDir/AppRun
-          chmod +x AppDir/AppRun
+impl PairGuiApp {
+    fn spawn_worker(rt: &Arc<Runtime>, mut rx: mpsc::UnboundedReceiver<GuiToBg>, tx: mpsc::UnboundedSender<BgToUi>) {
+        let tx_clone = tx.clone();
+        rt.spawn(async move {
+            let mut mux = match UsbmuxdConnection::new().await {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx_clone.send(BgToUi::Error(format!("usbmuxd: {e}")));
+                    return;
+                }
+            };
 
-      - name: Build AppImage
-        run: |
-          FILENAME="${{ env.APP_NAME }}-${{ env.VERSION }}-linux-${{ matrix.arch }}.AppImage"
-          ./appimagetool.AppImage AppDir "$FILENAME"
+            use std::collections::HashMap;
+            let mut pair_cache: HashMap<String, PairRecord> = HashMap::new();
 
-      - name: Upload AppImage
-        uses: actions/upload-artifact@v4.4.0
-        with:
-          include-hidden-files: true
-          name: ${{ env.APP_NAME }}-${{ env.VERSION }}-linux-${{ matrix.arch }}.AppImage
-          path: ${{ env.APP_NAME }}-${{ env.VERSION }}-linux-${{ matrix.arch }}.AppImage
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    GuiToBg::RefreshDevices => match mux.list_devices().await {
+                        Ok(list) => {
+                            let _ = tx_clone.send(BgToUi::DeviceList(list));
+                        }
+                        Err(e) => {
+                            let _ = tx_clone.send(BgToUi::Error(e.to_string()));
+                        }
+                    },
 
-  # macOS: Build universal .app
-  macos-universal:
-    name: Build & Upload macOS Universal .app
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        arch: [x86_64, arm64]
-    steps:
-      - uses: actions/checkout@v3
+                    GuiToBg::Pair(udid) => {
+                        if let Some(rec) = pair_cache.get(&udid) {
+                            let _ = tx_clone.send(BgToUi::PairComplete { udid, pair_record: rec.clone() });
+                            continue;
+                        }
+                        match LockdowndClient::pair_with_udid(&udid).await {
+                            Ok(rec) => {
+                                pair_cache.insert(udid.clone(), rec.clone());
+                                let _ = tx_clone.send(BgToUi::PairComplete { udid, pair_record: rec });
+                            }
+                            Err(e) => {
+                                let _ = tx_clone.send(BgToUi::Error(format!("pairing: {e}")));
+                            }
+                        }
+                    }
 
-      - name: Set up Rust for ${{ matrix.arch }}
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: ${{ matrix.arch == 'x86_64' && 'x86_64-apple-darwin' || 'aarch64-apple-darwin' }}
+                    GuiToBg::ListAfc(udid, path) => match AfcClient::connect(&udid).await {
+                        Ok(mut afc) => match afc.list_dir(&path).await {
+                            Ok(list) => {
+                                let items = list
+                                    .into_iter()
+                                    .map(|e| FileEntry { name: e.name, is_dir: e.is_directory, size: e.size })
+                                    .collect();
+                                let _ = tx_clone.send(BgToUi::AfcListing { path, entries: items });
+                            }
+                            Err(e) => {
+                                let _ = tx_clone.send(BgToUi::Error(format!("afc ls: {e}")));
+                            }
+                        },
+                        Err(e) => {
+                            let _ = tx_clone.send(BgToUi::Error(format!("open afc: {e}")));
+                        }
+                    },
+                }
+            }
+        });
+    }
 
-      - name: Build ${{ matrix.arch }} slice
-        run: |
-          cargo build --release \
-            --bin ${{ env.BINARY_NAME }} \
-            --target ${{ matrix.arch == 'x86_64' && 'x86_64-apple-darwin' || 'aarch64-apple-darwin' }}
+    fn bg(&self, msg: GuiToBg) {
+        let _ = self.tx.send(msg);
+    }
+}
 
-      - name: Upload ${{ matrix.arch }} slice
-        uses: actions/upload-artifact@v4.4.0
-        with:
-          include-hidden-files: true
-          name: slice-${{ matrix.arch }}
-          path: target/${{ matrix.arch == 'x86_64' && 'x86_64-apple-darwin' || 'aarch64-apple-darwin' }}/release/${{ env.BINARY_NAME }}
+impl App for PairGuiApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Pump background messages first.
+        while let Ok(msg) = self.rx.try_recv() {
+            match msg {
+                BgToUi::DeviceList(list) => {
+                    self.devices = list;
+                }
+                BgToUi::PairComplete { udid, .. } => {
+                    if Some(&udid) == self.selected.as_ref() {
+                        self.paired = true;
+                        info!("paired with {udid}");
+                    }
+                }
+                BgToUi::AfcListing { path, entries } => {
+                    self.cwd = path;
+                    self.entries = entries;
+                }
+                BgToUi::Error(e) => {
+                    self.last_error = Some(e);
+                }
+            }
+        }
 
-  # Combine slices into a universal .app and upload it
-  macos-bundle:
-    name: Create & Upload Universal .app Bundle
-    needs: macos-universal
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v3
+        // ── UI ────────────────────────────────────────────────────────────
+        egui::TopBottomPanel::top("top").show(ctx, |ui| {
+            if ui.button("🔄 Refresh").clicked() {
+                self.bg(GuiToBg::RefreshDevices);
+            }
+            if let Some(err) = &self.last_error {
+                ui.colored_label(egui::Color32::RED, err);
+            }
+        });
 
-      - name: Download x86_64 slice
-        uses: actions/download-artifact@v4
-        with:
-          name: slice-x86_64
-          path: slice-x86_64
+        egui::SidePanel::left("devices").show(ctx, |ui| {
+            ui.heading("Devices");
+            ui.separator();
+            for dev in &self.devices {
+                let label = format!("id={} udid={}", dev.device_id, dev.udid);
+                if ui.selectable_label(Some(&dev.udid) == self.selected.as_ref(), label).clicked() {
+                    self.selected = Some(dev.udid.clone());
+                    self.paired = false;
+                }
+            }
+            ui.separator();
+            if ui.button("Pair / Trust").clicked() {
+                if let Some(id) = &self.selected {
+                    self.bg(GuiToBg::Pair(id.clone()));
+                }
+            }
+        });
 
-      - name: Download arm64 slice        
-        uses: actions/download-artifact@v4
-        with:
-          name: slice-arm64
-          path: slice-arm64
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading(format!("AFC — {}", self.cwd));
+            ui.separator();
+            if !self.paired {
+                ui.label("Select a device and click *Pair / Trust*.");
+                return;
+            }
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for f in &self.entries {
+                    let icon = if f.is_dir { "📁" } else { "📄" };
+                    let label = format!("{icon} {}", f.name);
+                    if ui.selectable_label(false, label).clicked() && f.is_dir {
+                        let next = if self.cwd == "/" { format!("/{}", f.name) } else { format!("{}/{}", self.cwd, f.name) };
+                        self.bg(GuiToBg::ListAfc(self.selected.clone().unwrap(), next));
+                    }
+                }
+            });
+        });
 
-      - name: Create .app Bundle              
-        run: |
-          APP=${{ env.BINARY_NAME }}
-          mkdir -p "${APP}.app/Contents/MacOS" "${APP}.app/Contents/Resources"
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+}
 
-          # merge the two architecture slices into one universal binary
-          lipo -create slice-x86_64/${APP} slice-arm64/${APP} \
-               -output "${APP}.app/Contents/MacOS/${APP}"
-          chmod +x "${APP}.app/Contents/MacOS/${APP}"
+//───────────────────────────────────────────────────────────────────────────────
+//  Main — sets up logging, Tokio, channels, and the GUI.
+//───────────────────────────────────────────────────────────────────────────────
+fn main() -> Result<()> {
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", "info");
+    }
+    env_logger::init();
 
-          cat > "${APP}.app/Contents/Info.plist" <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleName</key><string>${APP}</string>
-            <key>CFBundleIdentifier</key><string>com.github.se2cird2.${APP}</string>
-            <key>CFBundleVersion</key><string>${VERSION}</string>
-            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-            <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            <key>CFBundleExecutable</key><string>${APP}</string>
-            <key>CFBundleIconFile</key><string>idevicepair.icns</string>
-          </dict>
-          </plist>
-          EOF
+    let rt = Arc::new(Runtime::new().context("tokio")?);
 
-          sips -s format icns "${{ env.ICON_PNG }}" \
-               --out "${APP}.app/Contents/Resources/idevicepair.icns"
-          xattr -rc "${APP}.app"
-          codesign --deep --force --sign - "${APP}.app"
-          plutil -lint "${APP}.app/Contents/Info.plist"
+    let (tx_gui, rx_worker) = mpsc::unbounded_channel::<GuiToBg>();
+    let (tx_worker, rx_gui) = mpsc::unbounded_channel::<BgToUi>();
 
-      - name: Upload .app Bundle      
-        uses: actions/upload-artifact@v4.4.0
-        with:
-          include-hidden-files: true
-          name: ${{ env.APP_NAME }}-${{ env.VERSION }}-macos-universal.app
-          path: ${{ env.APP_NAME }}.app
+    PairGuiApp::spawn_worker(&rt, rx_worker, tx_worker);
 
+    let app = PairGuiApp {
+        rt,
+        tx: tx_gui,
+        rx: rx_gui,
+        devices: Vec::new(),
+        selected: None,
+        paired: false,
+        cwd: "/".into(),
+        entries: Vec::new(),
+        last_error: None,
+    };
 
-  # Windows: Build and upload .exe
-  build-windows:
-    name: Build & Upload Windows .exe
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v3
+    let native = eframe::NativeOptions::default();
+    eframe::run_native(
+        "Pair GUI (AFC)",
+        native,
+        Box::new(move |_cc| Ok::<_, Box<dyn std::error::Error + Send + Sync>>(Box::new(app))),
+    )?;
+    Ok(())
+}
 
-      - name: Cache Cargo registry & build artifacts
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/index
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-x86_64-pc-windows-msvc
-          restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
-            ${{ runner.os }}-cargo-
-
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          target: x86_64-pc-windows-msvc
-
-      - name: Build and Rename Executable
-        shell: bash
-        run: |
-          cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
-          mkdir -p release
-          cp target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe \
-             release/${{ env.APP_NAME }}-${{ env.VERSION }}-windows-x86_64.exe
-
-      - name: Upload Windows .exe
-        uses: actions/upload-artifact@v4.4.0
-        with:
-          include-hidden-files: true
-          name: ${{ env.APP_NAME }}-${{ env.VERSION }}-windows-x86_64.exe
-          path: release/${{ env.APP_NAME }}-${{ env.VERSION }}-windows-x86_64.exe
+//───────────────────────────────────────────────────────────────────────────────
+// End of file
+//───────────────────────────────────────────────────────────────────────────────
